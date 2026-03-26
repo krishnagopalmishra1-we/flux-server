@@ -1,0 +1,21 @@
+services:
+  flux-server:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - hf-cache:/mnt/hf-cache
+      - ./loras:/app/loras
+    env_file:
+      - .env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
