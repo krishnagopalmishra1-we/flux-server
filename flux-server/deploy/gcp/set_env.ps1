@@ -1,0 +1,12 @@
+$env:PROJECT_ID = "flux-lora-gpu-project"
+$env:REGION = "us-central1"
+$env:ZONE = "us-central1-a"
+$env:INSTANCE_NAME = "flux-a100-preemptible"
+$env:MACHINE_TYPE = "a2-highgpu-1g"
+$env:IMAGE_FAMILY = "ubuntu-2204-lts"
+$env:IMAGE_PROJECT = "ubuntu-os-cloud"
+$env:BOOT_DISK_GB = "200"
+$env:NETWORK_TAG = "flux-image-gen"
+
+Write-Host "Environment configured for project: $env:PROJECT_ID"
+Write-Host "Region: $env:REGION, Zone: $env:ZONE"

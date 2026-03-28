@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.env.local
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local model artifacts
+loras/
+
+# Python cache and tooling
+.mypy_cache/
+.pytest_cache/
+
+# Editor/local settings
+.vscode/
