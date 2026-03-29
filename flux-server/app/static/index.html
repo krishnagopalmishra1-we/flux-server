@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neural Image Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    window.onerror = function(msg, src, line, col, err) {
+      document.getElementById('root').innerHTML =
+        '<div style="color:red;background:#111;padding:20px;font-family:monospace;white-space:pre-wrap">' +
+        'JS ERROR:\n' + msg + '\nSource: ' + src + '\nLine: ' + line + ', Col: ' + col +
+        (err && err.stack ? '\n\nStack:\n' + err.stack : '') + '</div>';
+    };
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

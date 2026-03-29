@@ -1,12 +1,13 @@
 import logging
 from contextlib import asynccontextmanager
-import gradio as gr
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from app.schemas import GenerateRequest, GenerateResponse, HealthResponse
 from app.security import verify_api_key, check_rate_limit
 from app.pipeline_new import inference_pipeline as flux_pipeline
-from app.ui import build_ui
 from app.dataset_plan import get_dataset_plan, available_domains
 from app.training_presets import get_lora_preset
 
@@ -77,6 +78,40 @@ async def list_models():
     }
 
 
+@app.get("/loras")
+async def list_loras(model_name: str = "flux-1-dev"):
+    """List LoRA files compatible with the selected model."""
+    return {
+        "model_name": model_name,
+        "recommended_scale": flux_pipeline.get_recommended_lora_scale(model_name),
+        "loras": flux_pipeline.get_compatible_loras(model_name),
+    }
+
+
+@app.post("/loras/upload")
+async def upload_lora(file: UploadFile = File(...)):
+    """Upload a .safetensors LoRA file to the loras/ directory."""
+    if not file.filename.endswith(".safetensors"):
+        raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
+
+    # Sanitize filename — strip any path components
+    safe_name = Path(file.filename).name
+    if not safe_name or safe_name != file.filename.replace("\\", "/").split("/")[-1]:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    lora_dir = Path("loras")
+    lora_dir.mkdir(exist_ok=True)
+    dest = lora_dir / safe_name
+
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    dest.write_bytes(contents)
+    logger.info("LoRA uploaded: %s (%d bytes)", safe_name, len(contents))
+    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents)}
+
+
 @app.get("/datasets/domains")
 async def dataset_domains():
     """List available dataset planning domains."""
@@ -126,6 +161,39 @@ async def generate(
     )
 
 
-# Mount Gradio UI at root — API endpoints remain at /health, /generate, /docs
-gradio_app = build_ui()
-app = gr.mount_gradio_app(app, gradio_app, path="/")
+@app.post("/generate-ui", response_model=GenerateResponse)
+async def generate_ui(req: GenerateRequest, request: Request):
+    """Browser-facing generation endpoint for the built-in UI."""
+    check_rate_limit(request, "")
+
+    img_b64, seed_used, elapsed_ms = flux_pipeline.generate(
+        prompt=req.prompt,
+        negative_prompt=req.negative_prompt,
+        model_name=req.model_name,
+        width=req.width,
+        height=req.height,
+        num_inference_steps=req.num_inference_steps,
+        guidance_scale=req.guidance_scale,
+        seed=req.seed,
+        lora_name=req.lora_name,
+        lora_scale=req.lora_scale,
+        use_refiner=req.use_refiner,
+    )
+
+    return GenerateResponse(
+        status="completed",
+        image_base64=img_b64,
+        seed_used=seed_used,
+        inference_time_ms=elapsed_ms,
+    )
+
+
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def root_ui():
+    return FileResponse(STATIC_DIR / "index.html")
