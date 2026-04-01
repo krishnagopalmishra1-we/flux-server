@@ -4,7 +4,10 @@
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3-pip git && \
+    python3.11 python3.11-venv python3-pip git \
+    build-essential cmake pkg-config \
+    ffmpeg libavformat-dev libavcodec-dev libavdevice-dev \
+    libavutil-dev libavfilter-dev libswscale-dev libswresample-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -19,7 +22,13 @@ RUN python3.11 -m venv /opt/venv && \
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 libgl1 libglib2.0-0 && \
+    python3.11 \
+    libgl1 \
+    libglib2.0-0 \
+    ffmpeg \
+    libsndfile1 \
+    libsm6 \
+    libxext6 && \
     rm -rf /var/lib/apt/lists/* && \
     useradd -m -s /bin/bash appuser
 
@@ -32,7 +41,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
 WORKDIR /app
 COPY app/ ./app/
 COPY gunicorn.conf.py .
-RUN mkdir -p loras && chown -R appuser:appuser loras
+
+# Create directories with correct permissions
+RUN mkdir -p loras /mnt/outputs/video /mnt/outputs/audio /mnt/outputs/animation && \
+    chown -R appuser:appuser loras /mnt/outputs
 
 # Run as non-root for security
 USER appuser

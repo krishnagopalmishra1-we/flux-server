@@ -17,10 +17,12 @@ Write-Host "Step 3/5: Waiting for VM SSH readiness"
 Start-Sleep -Seconds 30
 
 Write-Host "Step 4/5: Copying project to VM"
-gcloud compute scp --recurse "$repoRoot\\*" "$env:INSTANCE_NAME`:/opt/flux-server" --zone=$env:ZONE
+gcloud compute ssh $env:INSTANCE_NAME --zone=$env:ZONE --command "mkdir -p /opt/flux-server"
+gcloud compute scp --recurse "$repoRoot\\app" "$env:INSTANCE_NAME`:/opt/flux-server" --zone=$env:ZONE
+gcloud compute scp "$repoRoot\\Dockerfile" "$repoRoot\\docker-compose.yml" "$repoRoot\\gunicorn.conf.py" "$repoRoot\\requirements.txt" "$repoRoot\\.env.example" "$env:INSTANCE_NAME`:/opt/flux-server" --zone=$env:ZONE
 
 Write-Host "Step 5/5: Creating .env and starting containers"
-gcloud compute ssh $env:INSTANCE_NAME --zone=$env:ZONE --command "cd /opt/flux-server; cp .env.example .env; sed -i 's|# CACHE_DIR=/mnt/hf-cache|CACHE_DIR=/mnt/hf-cache|g' .env; sed -i 's|# MODEL_ID=black-forest-labs/FLUX.1-dev|MODEL_ID=black-forest-labs/FLUX.1-dev|g' .env; echo 'PORT=8080' >> .env; echo 'WORKERS=1' >> .env; docker compose up -d --build"
+gcloud compute ssh $env:INSTANCE_NAME --zone=$env:ZONE --command "cd /opt/flux-server; if [ ! -f .env ]; then cp .env.example .env; fi; grep -q '^PORT=' .env || echo 'PORT=8080' >> .env; grep -q '^WORKERS=' .env || echo 'WORKERS=1' >> .env; sudo docker compose up -d --build"
 
 gcloud compute instances list --filter="name=$env:INSTANCE_NAME" --zones=$env:ZONE
 

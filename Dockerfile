@@ -14,12 +14,14 @@ RUN python3.11 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # ============================================================
-# Stage 2: Runtime — slim production image
+# Stage 2: Runtime — slim production image with ffmpeg & audio libs
 # ============================================================
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 libgl1 libglib2.0-0 && \
+    python3.11 libgl1 libglib2.0-0 \
+    ffmpeg libsndfile1 libsm6 libxext6 \
+    build-essential && \
     rm -rf /var/lib/apt/lists/* && \
     useradd -m -s /bin/bash appuser
 

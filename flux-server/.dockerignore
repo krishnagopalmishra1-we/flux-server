@@ -1,0 +1,24 @@
+# VCS
+.git
+.gitignore
+
+# Python cache/build
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Local environments and tooling
+.venv/
+venv/
+
+# OS/editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local data not needed in image
+loras/
+models/
+outputs/

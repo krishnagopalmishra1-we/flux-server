@@ -710,7 +710,7 @@ def build_ui() -> gr.Blocks:
             neg_label = "Negative Prompt" + (" (disabled for FLUX)" if is_flux else "")
             if selected_model in {"realvisxl-v5", "juggernaut-xl"}:
                 guidance_min, guidance_max = 1.0, 12.0
-            elif selected_model == "sd3-medium":
+            elif selected_model == "sd3.5-large":
                 guidance_min, guidance_max = 1.0, 10.0
             else:
                 guidance_min, guidance_max = 0.0, 10.0

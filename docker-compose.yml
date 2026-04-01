@@ -5,6 +5,7 @@ services:
       - "8080:8080"
     volumes:
       - hf-cache:/mnt/hf-cache
+      - outputs:/mnt/outputs
       - ./loras:/app/loras
     env_file:
       - .env
@@ -15,7 +16,9 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    shm_size: 2gb
     restart: unless-stopped
 
 volumes:
   hf-cache:
+  outputs:

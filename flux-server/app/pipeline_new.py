@@ -1,6 +1,6 @@
 """
 Multi-Model Inference Pipeline with LoRA support.
-Supports FLUX.1-dev, FLUX.1-schnell, SD3-Medium, SDXL and others.
+Supports FLUX.1-dev, SD3.5-Large, SDXL and others.
 """
 
 import torch
@@ -32,7 +32,7 @@ AUTO_NEGATIVE_STYLE = {
 AUTO_NEGATIVE_MODEL = {
     "realvisxl-v5": "plastic skin, doll-like face, unnatural eyes",
     "juggernaut-xl": "overexposed highlights, waxy skin, oversaturated",
-    "sd3-medium": "repeated text, typographic artifacts",
+    "sd3.5-large": "repeated text, typographic artifacts",
 }
 
 
@@ -210,7 +210,7 @@ class InferencePipeline:
         model_order = {
             "flux": ["flux-1-dev"],
             "sdxl": ["realvisxl-v5", "juggernaut-xl"],
-            "sd3": ["sd3-medium"],
+            "sd3": ["sd3.5-large"],
         }
         for model_name in model_order.get(lora_type, []):
             if model_name in self.model_manager.MODELS:
@@ -412,8 +412,9 @@ class InferencePipeline:
         return self.model_manager.is_loaded()
     
     def list_available_models(self) -> dict:
-        """List all available models."""
-        return self.model_manager.list_models()
+        """List available image models (backward-compatible for Gradio UI)."""
+        from app.model_manager import ModelCategory
+        return self.model_manager.list_models(ModelCategory.IMAGE)
     
     def get_model_info(self, model_name: str = None) -> dict:
         """Get info about a model."""

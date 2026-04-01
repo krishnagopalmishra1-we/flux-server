@@ -10,3 +10,4 @@ $env:NETWORK_TAG = "flux-image-gen"
 
 Write-Host "Environment configured for project: $env:PROJECT_ID"
 Write-Host "Region: $env:REGION, Zone: $env:ZONE"
+Write-Host "Instance: $env:INSTANCE_NAME ($env:MACHINE_TYPE with A100 GPU)"

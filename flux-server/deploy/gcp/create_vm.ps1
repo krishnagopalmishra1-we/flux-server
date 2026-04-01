@@ -3,6 +3,11 @@ if (-not $env:PROJECT_ID) {
   exit 1
 }
 
+$acceleratorArg = ""
+if ($env:ACCELERATOR_TYPE -and $env:ACCELERATOR_COUNT) {
+  $acceleratorArg = "--accelerator=type=$($env:ACCELERATOR_TYPE),count=$($env:ACCELERATOR_COUNT)"
+}
+
 gcloud compute instances create $env:INSTANCE_NAME `
   --project=$env:PROJECT_ID `
   --zone=$env:ZONE `
@@ -14,6 +19,7 @@ gcloud compute instances create $env:INSTANCE_NAME `
   --image-project=$env:IMAGE_PROJECT `
   --boot-disk-size=${env:BOOT_DISK_GB}GB `
   --boot-disk-type=pd-ssd `
+  $acceleratorArg `
   --tags=$env:NETWORK_TAG `
   --metadata-from-file=startup-script=deploy/gcp/startup.sh
 

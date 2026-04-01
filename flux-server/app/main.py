@@ -6,10 +6,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.schemas import GenerateRequest, GenerateResponse, HealthResponse
+from app.schemas_v2 import (
+    VideoGenerateRequest, VideoGenerateResponse,
+    MusicGenerateRequest, MusicGenerateResponse,
+    AnimationGenerateRequest, AnimationGenerateResponse,
+    JobStatusResponse, QueueStatusResponse,
+)
 from app.security import verify_api_key, check_rate_limit
 from app.pipeline_new import inference_pipeline as flux_pipeline
+from app.model_manager import ModelCategory
+from app.job_queue import job_queue, JobPriority, JobStatus
+from app.output_store import output_store
+from app.pipelines.video_pipeline import video_pipeline
+from app.pipelines.music_pipeline import music_pipeline
+from app.pipelines.animation_pipeline import animation_pipeline
 from app.dataset_plan import get_dataset_plan, available_domains
 from app.training_presets import get_lora_preset
+from app.config import get_settings
 
 # Configure logging
 logging.basicConfig(
@@ -19,22 +32,111 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ═══════════════════════════════════════════════════
+#  JOB HANDLERS — Connect job queue to pipelines
+# ═══════════════════════════════════════════════════
+
+async def _handle_video_job(job) -> dict:
+    """Process a video generation job."""
+    payload = job.payload
+    # Unload any image model first
+    flux_pipeline.model_manager.unload_all()
+
+    if payload.get("source_image_b64"):
+        return await video_pipeline.generate_image_to_video(
+            source_image_b64=payload["source_image_b64"],
+            prompt=payload.get("prompt", ""),
+            model_name=job.model_name,
+            num_frames=payload.get("num_frames", 33),
+            fps=payload.get("fps", 16),
+            guidance_scale=payload.get("guidance_scale", 5.0),
+            num_inference_steps=payload.get("num_inference_steps", 30),
+            seed=payload.get("seed"),
+            job_id=job.id,
+        )
+    else:
+        return await video_pipeline.generate_text_to_video(
+            prompt=payload["prompt"],
+            model_name=job.model_name,
+            negative_prompt=payload.get("negative_prompt", ""),
+            resolution=payload.get("resolution", "480p"),
+            num_frames=payload.get("num_frames", 33),
+            fps=payload.get("fps", 16),
+            guidance_scale=payload.get("guidance_scale", 5.0),
+            num_inference_steps=payload.get("num_inference_steps", 30),
+            seed=payload.get("seed"),
+            job_id=job.id,
+        )
+
+
+async def _handle_music_job(job) -> dict:
+    """Process a music generation job."""
+    flux_pipeline.model_manager.unload_all()
+    payload = job.payload
+
+    return await music_pipeline.generate_song(
+        prompt=payload["prompt"],
+        model_name=job.model_name,
+        duration_seconds=payload.get("duration_seconds", 30),
+        lyrics=payload.get("lyrics"),
+        genre=payload.get("genre"),
+        bpm=payload.get("bpm"),
+        seed=payload.get("seed"),
+        job_id=job.id,
+    )
+
+
+async def _handle_animation_job(job) -> dict:
+    """Process an animation generation job."""
+    flux_pipeline.model_manager.unload_all()
+    payload = job.payload
+
+    return await animation_pipeline.generate_talking_head(
+        source_image_b64=payload["source_image_b64"],
+        audio_b64=payload["audio_b64"],
+        model_name=job.model_name,
+        expression_scale=payload.get("expression_scale", 1.0),
+        pose_style=payload.get("pose_style", 0),
+        use_enhancer=payload.get("use_enhancer", False),
+        job_id=job.id,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the model on startup, cleanup on shutdown."""
-    logger.info("Starting multi-model inference server...")
+    """Load the model on startup, register job handlers, cleanup on shutdown."""
+    logger.info("Starting Neural Creation Studio...")
+
+    # Register job handlers for async generation
+    job_queue.register_handler("video", _handle_video_job)
+    job_queue.register_handler("music", _handle_music_job)
+    job_queue.register_handler("animation", _handle_animation_job)
+
+    # Create output directories
+    settings = get_settings()
+    Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
+    for subdir in ["video", "audio", "animation"]:
+        (Path(settings.output_dir) / subdir).mkdir(exist_ok=True)
+
+    # Load default image model
     flux_pipeline.load("flux-1-dev")
     logger.info("Server ready to accept requests!")
     yield
     # Cleanup on shutdown
     logger.info("Shutting down, releasing GPU memory...")
     flux_pipeline.model_manager.unload_all()
+    video_pipeline.unload()
+    music_pipeline.unload()
+    animation_pipeline.unload()
 
 
 app = FastAPI(
-    title="Multi-Model Image Generation API",
-    description="Generate images using FLUX.1-dev, FLUX.1-schnell, SD3-Medium, and SDXL on NVIDIA A100",
-    version="2.0.0",
+    title="Neural Creation Studio API",
+    description=(
+        "Multi-modal AI generation platform: Image, Video, Music, and Animation. "
+        "Powered by FLUX, Wan 2.2, ACE-Step, AudioLDM2, EchoMimic, and more."
+    ),
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -62,15 +164,17 @@ async def health():
 
 
 @app.get("/models")
-async def list_models():
-    """List available generation models and metadata."""
-    models = flux_pipeline.list_available_models()
+async def list_models(category: str = None):
+    """List available generation models and metadata, optionally filtered by category."""
+    cat_filter = ModelCategory(category) if category else None
+    models = flux_pipeline.model_manager.list_models(cat_filter)
     return {
         "current_model": flux_pipeline.model_manager.current_model,
+        "categories": flux_pipeline.model_manager.get_categories(),
         "models": [
             {
                 "name": name,
-                **flux_pipeline.get_model_info(name),
+                **flux_pipeline.model_manager.get_model_info(name),
                 "summary": summary,
             }
             for name, summary in models.items()
@@ -188,10 +292,179 @@ async def generate_ui(req: GenerateRequest, request: Request):
     )
 
 
+# ═══════════════════════════════════════════════════
+#  VIDEO GENERATION ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+
+@app.post("/api/video/generate", response_model=VideoGenerateResponse)
+async def generate_video(req: VideoGenerateRequest, request: Request):
+    """Submit a video generation job (text-to-video or image-to-video)."""
+    settings = get_settings()
+    if not settings.enable_video:
+        raise HTTPException(status_code=503, detail="Video generation is disabled.")
+
+    check_rate_limit(request, "")
+
+    try:
+        job = await job_queue.submit(
+            job_type="video",
+            model_name=req.model_name,
+            payload=req.model_dump(),
+            priority=JobPriority.SLOW,
+            user_id=request.client.host,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+    position = job_queue.get_queue_position(job.id)
+    return VideoGenerateResponse(
+        job_id=job.id,
+        status=job.status.value,
+        queue_position=position,
+    )
+
+
+# ═══════════════════════════════════════════════════
+#  MUSIC GENERATION ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+
+@app.post("/api/music/generate", response_model=MusicGenerateResponse)
+async def generate_music(req: MusicGenerateRequest, request: Request):
+    """Submit a music/song generation job."""
+    settings = get_settings()
+    if not settings.enable_music:
+        raise HTTPException(status_code=503, detail="Music generation is disabled.")
+
+    check_rate_limit(request, "")
+
+    try:
+        job = await job_queue.submit(
+            job_type="music",
+            model_name=req.model_name,
+            payload=req.model_dump(),
+            priority=JobPriority.FAST,
+            user_id=request.client.host,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+    position = job_queue.get_queue_position(job.id)
+    return MusicGenerateResponse(
+        job_id=job.id,
+        status=job.status.value,
+        queue_position=position,
+    )
+
+
+# ═══════════════════════════════════════════════════
+#  ANIMATION GENERATION ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+
+@app.post("/api/animation/generate", response_model=AnimationGenerateResponse)
+async def generate_animation(req: AnimationGenerateRequest, request: Request):
+    """Submit an animation generation job (audio-driven talking head)."""
+    settings = get_settings()
+    if not settings.enable_animation:
+        raise HTTPException(status_code=503, detail="Animation generation is disabled.")
+
+    check_rate_limit(request, "")
+
+    try:
+        job = await job_queue.submit(
+            job_type="animation",
+            model_name=req.model_name,
+            payload=req.model_dump(),
+            priority=JobPriority.NORMAL,
+            user_id=request.client.host,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+    position = job_queue.get_queue_position(job.id)
+    return AnimationGenerateResponse(
+        job_id=job.id,
+        status=job.status.value,
+        queue_position=position,
+    )
+
+
+# ═══════════════════════════════════════════════════
+#  JOB STATUS ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+
+@app.get("/api/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Poll the status of a generation job."""
+    job = job_queue.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    position = job_queue.get_queue_position(job_id)
+    return JobStatusResponse(
+        job_id=job.id,
+        job_type=job.job_type,
+        model_name=job.model_name,
+        status=job.status.value,
+        progress=job.progress,
+        result=job.result,
+        error_message=job.error_message,
+        queue_position=position,
+        queue_time_ms=job.queue_time_ms,
+        processing_time_ms=job.processing_time_ms,
+    )
+
+
+@app.get("/api/jobs")
+async def list_jobs(request: Request, status: str = None, limit: int = 20):
+    """List recent jobs for the current user."""
+    user_id = request.client.host
+    status_filter = JobStatus(status) if status else None
+    jobs = job_queue.list_jobs(user_id=user_id, status=status_filter, limit=limit)
+    return {"jobs": jobs, "total": len(jobs)}
+
+
+@app.delete("/api/jobs/{job_id}")
+async def cancel_job(job_id: str):
+    """Cancel a queued job."""
+    if job_queue.cancel_job(job_id):
+        return {"status": "cancelled", "job_id": job_id}
+    raise HTTPException(
+        status_code=400,
+        detail="Job cannot be cancelled (not found or already processing)."
+    )
+
+
+@app.get("/api/queue/status", response_model=QueueStatusResponse)
+async def queue_status():
+    """Get current queue statistics."""
+    stats = job_queue.queue_stats()
+    return QueueStatusResponse(**stats)
+
+
+# ═══════════════════════════════════════════════════
+#  STATIC FILES & OUTPUT SERVING
+# ═══════════════════════════════════════════════════
+
+
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Mount output directory for serving generated files
+try:
+    _settings = get_settings()
+    _output_path = Path(_settings.output_dir)
+    _output_path.mkdir(parents=True, exist_ok=True)
+    for _sub in ["video", "audio", "animation"]:
+        (_output_path / _sub).mkdir(exist_ok=True)
+    app.mount("/outputs", StaticFiles(directory=str(_output_path)), name="outputs")
+except Exception as _e:
+    logger.warning(f"Could not mount output directory: {_e}. Will be created at startup.")
 
 
 @app.get("/", include_in_schema=False)

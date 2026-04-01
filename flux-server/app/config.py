@@ -18,13 +18,34 @@ class Settings(BaseSettings):
     api_keys: str = ""  # Comma-separated valid API keys
     rate_limit_per_minute: int = 10
 
-    # Generation defaults
+    # Generation defaults (image)
     default_width: int = 1024
     default_height: int = 1024
     default_steps: int = 28
     default_guidance_scale: float = 3.5
     max_width: int = 2048
     max_height: int = 2048
+
+    # Output storage
+    output_dir: str = "/mnt/outputs"
+    output_ttl_hours: int = 24  # Auto-cleanup generated files after N hours
+
+    # Job queue
+    max_queue_size: int = 50
+    max_jobs_per_user: int = 5
+
+    # Feature flags — enable/disable modalities
+    enable_video: bool = True
+    enable_music: bool = True
+    enable_animation: bool = True
+
+    # Video defaults
+    wan_default_variant: str = "1.3b"  # "1.3b" or "14b"
+    default_video_fps: int = 16
+    default_video_frames: int = 33
+
+    # Music defaults
+    default_music_duration: int = 30  # seconds
 
     class Config:
         env_file = ".env"

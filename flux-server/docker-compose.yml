@@ -5,13 +5,15 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - hf-cache:/mnt/hf-cache
+      - /mnt/hf-cache-disk:/mnt/hf-cache
+      - outputs:/mnt/outputs
       - ./loras:/app/loras
       - ./models:/app/models
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     env_file:
       - .env
+    shm_size: '2g'
     deploy:
       resources:
         reservations:
@@ -22,4 +24,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  hf-cache:
+  outputs:
