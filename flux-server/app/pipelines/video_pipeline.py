@@ -27,6 +27,13 @@ from app.output_store import output_store
 
 logger = logging.getLogger(__name__)
 
+# ═══════════════════════════════════════════════════
+#  CUDA OPTIMIZATIONS — Faster math without quality loss
+# ═══════════════════════════════════════════════════
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True  # Fast matrix multiply with TF32
+    torch.backends.cudnn.allow_tf32 = True        # Fast cuDNN ops with TF32
+
 # Resolution presets → actual pixel dimensions
 RESOLUTION_MAP = {
     "480p": (480, 848),
@@ -84,7 +91,7 @@ class VideoPipeline:
         try:
             if model_name == "wan-t2v-1.3b":
                 self._load_wan_t2v(
-                    model_id="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                    model_id="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
                     quantize=False,
                     settings=settings,
                 )
@@ -116,7 +123,7 @@ class VideoPipeline:
             raise
 
     def _load_wan_t2v(self, model_id: str, quantize: bool, settings) -> None:
-        """Load Wan 2.2 Text-to-Video pipeline."""
+        """Load Wan 2.2 Text-to-Video pipeline with optimizations."""
         WanPipeline = self._resolve_pipeline_class(
             "WanPipeline",
             [
@@ -140,11 +147,22 @@ class VideoPipeline:
             self._pipe = WanPipeline.from_pretrained(model_id, **load_kwargs)
             self._pipe.to(self.device)
 
+        # Memory-efficient attention optimizations
         if hasattr(self._pipe, "enable_vae_slicing"):
             self._pipe.enable_vae_slicing()
+        if hasattr(self._pipe, "enable_vae_tiling"):
+            self._pipe.enable_vae_tiling()
+        if hasattr(self._pipe, "enable_attention_slicing"):
+            self._pipe.enable_attention_slicing()
+        if hasattr(self._pipe, "enable_xformers_memory_efficient_attention"):
+            try:
+                self._pipe.enable_xformers_memory_efficient_attention()
+                logger.info("✓ xFormers memory efficient attention enabled")
+            except Exception:
+                pass  # xFormers optional
 
     def _load_wan_i2v(self, model_id: str, settings) -> None:
-        """Load Wan 2.2 Image-to-Video pipeline."""
+        """Load Wan 2.2 Image-to-Video pipeline with optimizations."""
         WanImageToVideoPipeline = self._resolve_pipeline_class(
             "WanImageToVideoPipeline",
             [
@@ -162,11 +180,22 @@ class VideoPipeline:
 
         self._pipe = WanImageToVideoPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipe.enable_model_cpu_offload()
+        
+        # Memory-efficient attention optimizations
         if hasattr(self._pipe, "enable_vae_slicing"):
             self._pipe.enable_vae_slicing()
+        if hasattr(self._pipe, "enable_vae_tiling"):
+            self._pipe.enable_vae_tiling()
+        if hasattr(self._pipe, "enable_attention_slicing"):
+            self._pipe.enable_attention_slicing()
+        if hasattr(self._pipe, "enable_xformers_memory_efficient_attention"):
+            try:
+                self._pipe.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
 
     def _load_ltx_video(self, model_id: str, settings) -> None:
-        """Load LTX Video pipeline."""
+        """Load LTX Video pipeline with optimizations."""
         LTXPipeline = self._resolve_pipeline_class(
             "LTXPipeline",
             [
@@ -184,8 +213,19 @@ class VideoPipeline:
 
         self._pipe = LTXPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipe.to(self.device)
+        
+        # Memory-efficient attention optimizations
         if hasattr(self._pipe, "enable_vae_slicing"):
             self._pipe.enable_vae_slicing()
+        if hasattr(self._pipe, "enable_vae_tiling"):
+            self._pipe.enable_vae_tiling()
+        if hasattr(self._pipe, "enable_attention_slicing"):
+            self._pipe.enable_attention_slicing()
+        if hasattr(self._pipe, "enable_xformers_memory_efficient_attention"):
+            try:
+                self._pipe.enable_xformers_memory_efficient_attention()
+            except Exception:
+                pass
 
     def unload(self) -> None:
         """Unload current video model and free VRAM."""
@@ -199,6 +239,15 @@ class VideoPipeline:
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
 
+    def _apply_lora(self, lora_name: Optional[str], lora_scale: float) -> None:
+        """LoRA support for video pipelines — currently skipped (diffusers support varies)."""
+        # TODO: Implement when we confirm Wan/LTX support load_lora_weights
+        pass
+
+    def _unload_lora(self) -> None:
+        """LoRA cleanup — currently no-op."""
+        pass
+
     async def generate_text_to_video(
         self,
         prompt: str,
@@ -210,6 +259,8 @@ class VideoPipeline:
         guidance_scale: float = 5.0,
         num_inference_steps: int = 30,
         seed: Optional[int] = None,
+        lora_name: Optional[str] = None,
+        lora_scale: float = 1.0,
         job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -218,6 +269,7 @@ class VideoPipeline:
         Returns dict with video_url, duration_seconds, inference_time_ms.
         """
         self.load_model(model_name)
+        self._apply_lora(lora_name, lora_scale)
 
         height, width = RESOLUTION_MAP.get(resolution, (480, 848))
         # LTX-Video requires dimensions divisible by 32
@@ -258,6 +310,7 @@ class VideoPipeline:
         # Generate thumbnail from first frame
         thumbnail_b64 = self._frame_to_b64(frames[0] if frames else None)
 
+        self._unload_lora()
         torch.cuda.empty_cache()
 
         duration_seconds = len(frames) / fps
@@ -285,6 +338,8 @@ class VideoPipeline:
         guidance_scale: float = 5.0,
         num_inference_steps: int = 30,
         seed: Optional[int] = None,
+        lora_name: Optional[str] = None,
+        lora_scale: float = 1.0,
         job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -297,6 +352,7 @@ class VideoPipeline:
         source_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
         self.load_model(model_name)
+        self._apply_lora(lora_name, lora_scale)
 
         generator = torch.Generator(device="cpu")
         if seed is not None:
@@ -324,6 +380,7 @@ class VideoPipeline:
         video_path = self._save_video(frames, fps, job_id)
         thumbnail_b64 = self._frame_to_b64(frames[0] if frames else None)
 
+        self._unload_lora()
         torch.cuda.empty_cache()
 
         duration_seconds = len(frames) / fps

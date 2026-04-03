@@ -17,7 +17,7 @@ Write-Host "Step 3/5: Waiting for VM SSH readiness"
 Start-Sleep -Seconds 30
 
 Write-Host "Step 4/5: Copying project to VM"
-gcloud compute ssh $env:INSTANCE_NAME --zone=$env:ZONE --command "mkdir -p /opt/flux-server"
+gcloud compute ssh $env:INSTANCE_NAME --zone=$env:ZONE --command "mkdir -p /opt/flux-server/loras"
 gcloud compute scp --recurse "$repoRoot\\app" "$env:INSTANCE_NAME`:/opt/flux-server" --zone=$env:ZONE
 gcloud compute scp "$repoRoot\\Dockerfile" "$repoRoot\\docker-compose.yml" "$repoRoot\\gunicorn.conf.py" "$repoRoot\\requirements.txt" "$repoRoot\\.env.example" "$env:INSTANCE_NAME`:/opt/flux-server" --zone=$env:ZONE
 

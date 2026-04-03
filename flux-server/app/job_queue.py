@@ -300,7 +300,9 @@ class JobQueue:
         logger.info(f"Processing job: {job.id[:8]}... (type={job.job_type}, model={job.model_name})")
 
         try:
-            result = await handler(job)
+            # Run heavy generation handlers in a dedicated thread so the main
+            # event loop can continue serving status/health polling requests.
+            result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
             job.result = result
             job.status = JobStatus.COMPLETED
             job.progress = 100.0
@@ -314,6 +316,11 @@ class JobQueue:
             job.error_message = str(e)
             job.completed_at = time.time()
             logger.exception(f"Job failed: {job.id[:8]}... — {e}")
+
+    @staticmethod
+    def _run_handler_in_thread(handler: JobHandler, job: Job) -> Dict[str, Any]:
+        """Execute async handler in an isolated event loop inside a worker thread."""
+        return asyncio.run(handler(job))
 
     def _cleanup_expired(self) -> None:
         """Remove completed/failed jobs older than TTL."""

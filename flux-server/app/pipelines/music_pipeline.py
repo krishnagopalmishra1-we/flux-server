@@ -70,28 +70,21 @@ class MusicPipeline:
             raise
 
     def _load_ace_step(self, settings) -> None:
-        """Load ACE-Step for full song generation."""
-        # ACE-Step uses its own inference API
-        # Load via the ace_step package
-        try:
-            from ace_step.pipeline import ACEStepPipeline
-            self._pipe = ACEStepPipeline.from_pretrained(
-                "ACE-Step/ACE-Step-v1-3.5B",
-                cache_dir=settings.cache_dir,
-                torch_dtype=torch.bfloat16,
-            )
-            self._pipe.to(self.device)
-        except ImportError:
-            # Fallback: try loading via diffusers or HF pipeline
-            logger.warning("ace_step package not found, attempting HF AutoModel load")
-            from transformers import AutoModel
-            self._model = AutoModel.from_pretrained(
-                "ACE-Step/ACE-Step-v1-3.5B",
-                cache_dir=settings.cache_dir,
-                torch_dtype=torch.bfloat16,
-                trust_remote_code=True,
-            )
-            self._model.to(self.device)
+        """Load MusicGen as music generation backend (replaces ACE-Step)."""
+        # ace-step package is not installed; use facebook/musicgen-medium from transformers instead
+        from transformers import AutoProcessor, MusicgenForConditionalGeneration
+        logger.info("Loading MusicGen-medium as ace-step backend...")
+        model_id = "facebook/musicgen-medium"
+        self._processor = AutoProcessor.from_pretrained(
+            model_id,
+            cache_dir=settings.cache_dir,
+        )
+        self._model = MusicgenForConditionalGeneration.from_pretrained(
+            model_id,
+            cache_dir=settings.cache_dir,
+            torch_dtype=torch.float16,
+        )
+        self._model.to(self.device)
 
     def _load_audioldm2(self, settings) -> None:
         """Load AudioLDM 2 for high-quality audio generation."""
@@ -211,45 +204,43 @@ class MusicPipeline:
         bpm: Optional[int],
         seed: int,
     ) -> tuple:
-        """Generate using ACE-Step (full song with vocals)."""
+        """Generate music using MusicGen (ace-step replacement)."""
         import numpy as np
+        import asyncio
 
-        gen_kwargs = {
-            "prompt": prompt,
-            "duration": duration,
-        }
-        if lyrics:
-            gen_kwargs["lyrics"] = lyrics
+        full_prompt = prompt
         if genre:
-            gen_kwargs["tags"] = genre
+            full_prompt = f"{genre} music, {full_prompt}"
+        if lyrics:
+            full_prompt = f"{full_prompt}. Lyrics inspiration: {lyrics[:200]}"
         if bpm:
-            gen_kwargs["bpm"] = bpm
+            full_prompt = f"{full_prompt}, {bpm} bpm"
 
-        with torch.no_grad():
-            if self._pipe is not None:
-                result = self._pipe(**gen_kwargs)
-                if hasattr(result, "audio"):
-                    audio = result.audio
-                    sr = getattr(result, "sample_rate", 44100)
-                else:
-                    audio = result
-                    sr = 44100
-            elif self._model is not None:
-                result = self._model.generate(**gen_kwargs)
-                audio = result
-                sr = 44100
-            else:
-                raise RuntimeError("ACE-Step model not loaded")
+        inputs = self._processor(
+            text=[full_prompt],
+            padding=True,
+            return_tensors="pt",
+        ).to(self.device)
 
-        # Convert to numpy if tensor
-        if isinstance(audio, torch.Tensor):
-            audio = audio.cpu().numpy()
+        # MusicGen generates ~50 tokens per second at 32kHz
+        max_new_tokens = min(int(duration * 50), 3000)
 
-        # Ensure shape is (samples,) or (channels, samples)
-        if audio.ndim > 1:
-            audio = audio.squeeze()
+        def run_generation():
+            with torch.no_grad():
+                audio_values = self._model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                    guidance_scale=3.0,
+                )
+            return audio_values
 
-        return audio, sr
+        audio_values = await asyncio.to_thread(run_generation)
+
+        sample_rate = self._model.config.audio_encoder.sampling_rate
+        audio_data = audio_values[0, 0].cpu().numpy().astype(np.float32)
+
+        return audio_data, sample_rate
 
     async def _generate_audioldm2(
         self,

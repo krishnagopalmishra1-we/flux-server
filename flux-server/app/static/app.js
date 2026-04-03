@@ -60,6 +60,8 @@ const state = {
     num_inference_steps: 30,
     seed: "",
     source_image_b64: null,
+    lora_name: "None",
+    lora_scale: 1.0,
   },
   videoSourceName: "",
   // Music
@@ -320,6 +322,8 @@ async function onVideoGenerate(event) {
     num_inference_steps: Number(f.num_inference_steps),
     seed: f.seed === "" ? null : Number(f.seed),
     source_image_b64: f.source_image_b64 || null,
+    lora_name: !f.lora_name || f.lora_name === "None" ? null : f.lora_name,
+    lora_scale: Number(f.lora_scale),
   };
   try {
     const { response, data } = await fetchJson("/api/video/generate", {
@@ -624,6 +628,11 @@ function renderVideoTab() {
 
         <div class="field"><label for="v-seed">Seed</label><input id="v-seed" value="${escapeHtml(f.seed)}" placeholder="blank = random" /></div>
 
+        <div class="field-group two-col">
+          <div class="field"><label for="v-lora">LoRA</label><select id="v-lora">${state.loras.map((item) => `<option value="${escapeHtml(item)}" ${f.lora_name === item ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></div>
+          <div class="field"><label for="v-lora-scale">LoRA Scale</label><input id="v-lora-scale" type="number" min="0" max="2" step="0.05" value="${f.lora_scale}" /></div>
+        </div>
+
         <div class="field"><label>Image-to-Video (optional)</label>
           <div class="dropzone" id="v-dropzone">
             <input type="file" id="v-source-img" accept="image/*" style="display:none" />
@@ -912,6 +921,10 @@ function bindEvents() {
     if (vg) vg.addEventListener("input", (e) => { state.videoForm.guidance_scale = e.target.value; });
     const vseed = document.getElementById("v-seed");
     if (vseed) vseed.addEventListener("input", (e) => { state.videoForm.seed = e.target.value; });
+    const vlora = document.getElementById("v-lora");
+    if (vlora) vlora.addEventListener("change", (e) => { state.videoForm.lora_name = e.target.value; });
+    const vloraScale = document.getElementById("v-lora-scale");
+    if (vloraScale) vloraScale.addEventListener("input", (e) => { state.videoForm.lora_scale = e.target.value; });
 
     root.querySelectorAll("[data-vframes]").forEach((btn) => {
       btn.addEventListener("click", () => { state.videoForm.num_frames = Number(btn.dataset.vframes); render(); });

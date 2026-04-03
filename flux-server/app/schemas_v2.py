@@ -28,6 +28,9 @@ class VideoGenerateRequest(BaseModel):
     seed: Optional[int] = None
     # For Image-to-Video: base64-encoded source image
     source_image_b64: Optional[str] = None
+    # LoRA support for Wan 2.2 models
+    lora_name: Optional[str] = None
+    lora_scale: float = Field(1.0, ge=0.0, le=2.0)
 
     @field_validator("prompt")
     @classmethod

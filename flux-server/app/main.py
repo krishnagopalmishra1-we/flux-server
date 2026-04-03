@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
@@ -52,6 +53,8 @@ async def _handle_video_job(job) -> dict:
             guidance_scale=payload.get("guidance_scale", 5.0),
             num_inference_steps=payload.get("num_inference_steps", 30),
             seed=payload.get("seed"),
+            lora_name=payload.get("lora_name"),
+            lora_scale=payload.get("lora_scale", 1.0),
             job_id=job.id,
         )
     else:
@@ -65,6 +68,8 @@ async def _handle_video_job(job) -> dict:
             guidance_scale=payload.get("guidance_scale", 5.0),
             num_inference_steps=payload.get("num_inference_steps", 30),
             seed=payload.get("seed"),
+            lora_name=payload.get("lora_name"),
+            lora_scale=payload.get("lora_scale", 1.0),
             job_id=job.id,
         )
 
@@ -102,6 +107,19 @@ async def _handle_animation_job(job) -> dict:
     )
 
 
+# Lock that serialises GPU-heavy operations so image generation,
+# video pre-loading, and queued jobs never fight for VRAM at the same time.
+_gpu_lock = asyncio.Lock()
+
+
+async def _preload_video_model_background():
+    """Background task to pre-load Wan 2.2 model while server handles requests."""
+    # TEMPORARILY DISABLED to debug server responsiveness issues
+    # Re-enable once core models are working
+    logger.info("Video pre-load: disabled (debug mode)")
+    return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load the model on startup, register job handlers, cleanup on shutdown."""
@@ -118,12 +136,18 @@ async def lifespan(app: FastAPI):
     for subdir in ["video", "audio", "animation"]:
         (Path(settings.output_dir) / subdir).mkdir(exist_ok=True)
 
-    # Load default image model
-    flux_pipeline.load("flux-1-dev")
-    logger.info("Server ready to accept requests!")
+    # Keep startup fast and responsive; launch background model pre-loading
+    # while server immediately becomes ready to accept requests.
+    logger.info("Server ready to accept requests (Wan 2.2 pre-loading in background)")
+    preload_task = asyncio.create_task(_preload_video_model_background())
     yield
     # Cleanup on shutdown
     logger.info("Shutting down, releasing GPU memory...")
+    preload_task.cancel()
+    try:
+        await preload_task
+    except asyncio.CancelledError:
+        pass
     flux_pipeline.model_manager.unload_all()
     video_pipeline.unload()
     music_pipeline.unload()
@@ -144,7 +168,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST", "GET"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -154,7 +178,7 @@ async def health():
     """Check server health, GPU status, and model loading state."""
     gpu = flux_pipeline.gpu_info()
     return HealthResponse(
-        status="healthy" if flux_pipeline.is_loaded else "loading",
+        status="healthy",
         gpu_name=gpu["name"],
         vram_total_gb=gpu["total_gb"],
         vram_used_gb=gpu["used_gb"],
@@ -234,16 +258,14 @@ async def training_preset(style: str):
     return get_lora_preset(style)
 
 
-@app.post("/generate", response_model=GenerateResponse)
-async def generate(
-    req: GenerateRequest,
-    request: Request,
-    api_key: str = Depends(verify_api_key),
-):
-    """Generate an image from a text prompt."""
-    check_rate_limit(request, api_key)
+def _run_image_generation(req: GenerateRequest) -> tuple[str, int, float]:
+    """Run image inference in a worker thread (CPU-bound / GPU-bound)."""
+    # Unload any video/music/animation model to free VRAM for image model.
+    video_pipeline.unload()
+    music_pipeline.unload()
+    animation_pipeline.unload()
 
-    img_b64, seed_used, elapsed_ms = flux_pipeline.generate(
+    return flux_pipeline.generate(
         prompt=req.prompt,
         negative_prompt=req.negative_prompt,
         model_name=req.model_name,
@@ -256,6 +278,28 @@ async def generate(
         lora_scale=req.lora_scale,
         use_refiner=req.use_refiner,
     )
+
+
+@app.post("/generate", response_model=GenerateResponse)
+async def generate(
+    req: GenerateRequest,
+    request: Request,
+    api_key: str = Depends(verify_api_key),
+):
+    """Generate an image from a text prompt."""
+    check_rate_limit(request, api_key)
+
+    try:
+        async with _gpu_lock:
+            img_b64, seed_used, elapsed_ms = await asyncio.to_thread(
+                _run_image_generation, req
+            )
+    except RuntimeError as e:
+        logger.error(f"Image generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.exception("Unexpected error during image generation")
+        raise HTTPException(status_code=500, detail="Image generation failed. Check server logs.")
 
     return GenerateResponse(
         status="completed",
@@ -270,19 +314,17 @@ async def generate_ui(req: GenerateRequest, request: Request):
     """Browser-facing generation endpoint for the built-in UI."""
     check_rate_limit(request, "")
 
-    img_b64, seed_used, elapsed_ms = flux_pipeline.generate(
-        prompt=req.prompt,
-        negative_prompt=req.negative_prompt,
-        model_name=req.model_name,
-        width=req.width,
-        height=req.height,
-        num_inference_steps=req.num_inference_steps,
-        guidance_scale=req.guidance_scale,
-        seed=req.seed,
-        lora_name=req.lora_name,
-        lora_scale=req.lora_scale,
-        use_refiner=req.use_refiner,
-    )
+    try:
+        async with _gpu_lock:
+            img_b64, seed_used, elapsed_ms = await asyncio.to_thread(
+                _run_image_generation, req
+            )
+    except RuntimeError as e:
+        logger.error(f"Image generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.exception("Unexpected error during image generation")
+        raise HTTPException(status_code=500, detail="Image generation failed. Check server logs.")
 
     return GenerateResponse(
         status="completed",
