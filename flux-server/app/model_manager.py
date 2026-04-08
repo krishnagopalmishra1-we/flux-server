@@ -164,7 +164,7 @@ class MultiModelManager:
             pipeline_module="app.pipelines.video_pipeline",
             quantize=False,
             vram_free_gb=10.0,
-            description="Wan 2.1 T2V 1.3B: fast text-to-video, lightweight model",
+            description="Wan 2.1 T2V 1.3B: fast text-to-video, lightweight model (Wan 2.1)",
             min_steps=20,
             max_steps=50,
             default_steps=30,

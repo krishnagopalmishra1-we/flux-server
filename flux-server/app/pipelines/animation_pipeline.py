@@ -68,9 +68,16 @@ class AnimationPipeline:
             raise
 
     def _load_liveportrait(self, settings) -> None:
-        """Load AnimateDiff as portrait animation engine (replaces LivePortrait)."""
+        """Load AnimateDiff as portrait animation backend.
+
+        NOTE: The native liveportrait/echomimic packages are not installed.
+        This uses AnimateDiff (text-to-video diffusion) as a fallback backend.
+        The output is a realistic portrait animation loop timed to audio length;
+        it is NOT audio-driven lip-sync. The audio input determines output
+        duration only — it does not drive facial motion.
+        """
         from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
-        logger.info("Loading AnimateDiff motion adapter...")
+        logger.info("Loading AnimateDiff motion adapter (fallback for liveportrait/echomimic)...")
         adapter = MotionAdapter.from_pretrained(
             "guoyww/animatediff-motion-adapter-v1-5-2",
             cache_dir=settings.cache_dir,
@@ -94,10 +101,10 @@ class AnimationPipeline:
             pipe.enable_attention_slicing()
         pipe.to(self.device)
         self._model = pipe
-        logger.info("AnimateDiff loaded successfully")
+        logger.info("AnimateDiff fallback backend loaded successfully")
 
     def _load_echomimic(self, settings) -> None:
-        """Load AnimateDiff as echomimic replacement."""
+        """Load AnimateDiff as echomimic fallback backend."""
         # echomimic package not installed; reuse the same AnimateDiff backend
         self._load_liveportrait(settings)
 
@@ -156,6 +163,10 @@ class AnimationPipeline:
             source_image.save(tmp_img, format="PNG")
             image_path = tmp_img.name
 
+        logger.warning(
+            "Animation fallback: using AnimateDiff backend. Audio drives output duration "
+            "only — lip-sync is not supported without native liveportrait/echomimic packages."
+        )
         logger.info(
             f"Generating animation: model={model_name}, "
             f"expression={expression_scale}, pose={pose_style}"
@@ -252,7 +263,12 @@ class AnimationPipeline:
         output_path = tmpfile.name
         tmpfile.close()
 
-        writer = imageio.get_writer(output_path, fps=fps, quality=8)
+        writer = imageio.get_writer(
+            output_path,
+            fps=fps,
+            codec="libx264",
+            output_params=["-crf", "23", "-pix_fmt", "yuv420p"],
+        )
         for frame in frames:
             writer.append_data(np.array(frame))
         writer.close()

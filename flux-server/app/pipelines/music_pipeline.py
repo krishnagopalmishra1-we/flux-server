@@ -70,9 +70,18 @@ class MusicPipeline:
             raise
 
     def _load_ace_step(self, settings) -> None:
-        """Load MusicGen as music generation backend (replaces ACE-Step)."""
-        # ace-step package is not installed; use facebook/musicgen-medium from transformers instead
+        """Load MusicGen-medium as ace-step fallback backend.
+
+        NOTE: The ACE-Step package (ACE-Step/ACE-Step-v1-3.5B) is not pip-installable
+        as a standard diffusers model. facebook/musicgen-medium is used as a drop-in
+        fallback. It generates instrumental music; lyrics/vocal synthesis is not supported
+        by this backend.
+        """
         from transformers import AutoProcessor, MusicgenForConditionalGeneration
+        logger.warning(
+            "ace-step fallback: using facebook/musicgen-medium. "
+            "Vocal/lyrics synthesis not supported in this backend."
+        )
         logger.info("Loading MusicGen-medium as ace-step backend...")
         model_id = "facebook/musicgen-medium"
         self._processor = AutoProcessor.from_pretrained(

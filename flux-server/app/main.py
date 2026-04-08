@@ -130,6 +130,10 @@ async def lifespan(app: FastAPI):
     job_queue.register_handler("music", _handle_music_job)
     job_queue.register_handler("animation", _handle_animation_job)
 
+    # Share the GPU lock with the job queue so video/music/animation jobs
+    # cannot run concurrently with image generation endpoints.
+    job_queue.gpu_lock = _gpu_lock
+
     # Create output directories
     settings = get_settings()
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)

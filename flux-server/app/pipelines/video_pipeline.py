@@ -123,7 +123,12 @@ class VideoPipeline:
             raise
 
     def _load_wan_t2v(self, model_id: str, quantize: bool, settings) -> None:
-        """Load Wan 2.2 Text-to-Video pipeline with optimizations."""
+        """Load Wan Text-to-Video pipeline with optimizations.
+
+        quantize=True enables model CPU offload to fit the 14B model in 40GB VRAM.
+        Note: quantize_type="fp8" in ModelConfig is descriptive only — actual fp8
+        weight quantization is not applied here; CPU offload is the memory strategy.
+        """
         WanPipeline = self._resolve_pipeline_class(
             "WanPipeline",
             [
@@ -140,7 +145,9 @@ class VideoPipeline:
             load_kwargs["token"] = settings.hf_token
 
         if quantize:
-            # Use CPU offload for 14B model to fit in 40GB
+            # 14B model: load in bfloat16 + CPU offload to stay within 40GB VRAM.
+            # Layers migrate CPU<->GPU on demand; slower than pure-GPU but fits.
+            logger.info(f"Loading {model_id} with CPU offload (14B model strategy)...")
             self._pipe = WanPipeline.from_pretrained(model_id, **load_kwargs)
             self._pipe.enable_model_cpu_offload()
         else:
@@ -162,7 +169,7 @@ class VideoPipeline:
                 pass  # xFormers optional
 
     def _load_wan_i2v(self, model_id: str, settings) -> None:
-        """Load Wan 2.2 Image-to-Video pipeline with optimizations."""
+        """Load Wan Image-to-Video pipeline with CPU offload (14B model strategy)."""
         WanImageToVideoPipeline = self._resolve_pipeline_class(
             "WanImageToVideoPipeline",
             [
@@ -302,20 +309,24 @@ class VideoPipeline:
             )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
-        frames = output.frames[0]  # List of PIL images
+        # output.frames[0] may be a numpy array (diffusers 0.30+) or a list of PIL images.
+        # Normalise to a list of numpy arrays to avoid ambiguous truth-value checks.
+        raw_frames = output.frames[0]
+        frames = list(raw_frames) if hasattr(raw_frames, "__iter__") else []
 
         # Save as MP4
         video_path = self._save_video(frames, fps, job_id)
 
-        # Generate thumbnail from first frame
-        thumbnail_b64 = self._frame_to_b64(frames[0] if frames else None)
+        # Generate thumbnail from first frame (guard against empty frame list)
+        thumbnail_b64 = self._frame_to_b64(frames[0] if len(frames) > 0 else None)
 
         self._unload_lora()
         torch.cuda.empty_cache()
 
-        duration_seconds = len(frames) / fps
+        num_frames = len(frames)
+        duration_seconds = num_frames / fps
         logger.info(
-            f"Video generated: {len(frames)} frames, {duration_seconds:.1f}s, "
+            f"Video generated: {num_frames} frames, {duration_seconds:.1f}s, "
             f"inference={elapsed_ms:.0f}ms"
         )
 
@@ -325,7 +336,7 @@ class VideoPipeline:
             "duration_seconds": round(duration_seconds, 2),
             "inference_time_ms": round(elapsed_ms, 0),
             "seed_used": seed,
-            "num_frames": len(frames),
+            "num_frames": num_frames,
         }
 
     async def generate_image_to_video(
@@ -375,17 +386,19 @@ class VideoPipeline:
             )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
-        frames = output.frames[0]
+        raw_frames = output.frames[0]
+        frames = list(raw_frames) if hasattr(raw_frames, "__iter__") else []
 
         video_path = self._save_video(frames, fps, job_id)
-        thumbnail_b64 = self._frame_to_b64(frames[0] if frames else None)
+        thumbnail_b64 = self._frame_to_b64(frames[0] if len(frames) > 0 else None)
 
         self._unload_lora()
         torch.cuda.empty_cache()
 
-        duration_seconds = len(frames) / fps
+        num_frames = len(frames)
+        duration_seconds = num_frames / fps
         logger.info(
-            f"I2V generated: {len(frames)} frames, {duration_seconds:.1f}s, "
+            f"I2V generated: {num_frames} frames, {duration_seconds:.1f}s, "
             f"inference={elapsed_ms:.0f}ms"
         )
 
@@ -395,7 +408,7 @@ class VideoPipeline:
             "duration_seconds": round(duration_seconds, 2),
             "inference_time_ms": round(elapsed_ms, 0),
             "seed_used": seed,
-            "num_frames": len(frames),
+            "num_frames": num_frames,
         }
 
     def _save_video(self, frames: list, fps: int, job_id: Optional[str]) -> str:
@@ -405,11 +418,27 @@ class VideoPipeline:
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp_path = tmp.name
 
-        # Convert PIL images to numpy arrays for imageio
+        # Convert frames to uint8 numpy arrays for imageio.
+        # Frames may be PIL Images or numpy arrays (diffusers version-dependent).
         import numpy as np
-        np_frames = [np.array(frame) for frame in frames]
+        from PIL import Image as _PILImage
+        np_frames = []
+        for frame in frames:
+            if isinstance(frame, _PILImage.Image):
+                np_frames.append(np.array(frame))
+            else:
+                arr = np.array(frame)
+                # Normalise float [0,1] → uint8 [0,255] if needed
+                if arr.dtype != np.uint8:
+                    arr = (arr * 255).clip(0, 255).astype(np.uint8)
+                np_frames.append(arr)
 
-        writer = imageio.get_writer(tmp_path, fps=fps, codec="libx264", quality=8)
+        writer = imageio.get_writer(
+            tmp_path,
+            fps=fps,
+            codec="libx264",
+            output_params=["-crf", "23", "-pix_fmt", "yuv420p"],
+        )
         for frame in np_frames:
             writer.append_data(frame)
         writer.close()
@@ -419,9 +448,16 @@ class VideoPipeline:
         return rel_path
 
     def _frame_to_b64(self, frame) -> Optional[str]:
-        """Convert a PIL frame to base64 JPEG thumbnail."""
+        """Convert a PIL image or numpy array frame to base64 JPEG thumbnail."""
         if frame is None:
             return None
+        from PIL import Image as _PILImage
+        import numpy as np
+        if not isinstance(frame, _PILImage.Image):
+            arr = np.array(frame)
+            if arr.dtype != np.uint8:
+                arr = (arr * 255).clip(0, 255).astype(np.uint8)
+            frame = _PILImage.fromarray(arr)
         thumb = frame.copy()
         thumb.thumbnail((320, 180))
         buf = io.BytesIO()

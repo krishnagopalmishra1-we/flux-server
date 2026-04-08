@@ -115,6 +115,9 @@ class JobQueue:
         self._handlers: Dict[str, JobHandler] = {}
         self._processing = False
         self._worker_task: Optional[asyncio.Task] = None
+        # Shared GPU lock — set by main.py after startup to serialize GPU access
+        # with the image generation endpoints, preventing VRAM contention.
+        self.gpu_lock: Optional[asyncio.Lock] = None
 
         logger.info(
             f"JobQueue initialized (max_size={max_queue_size}, "
@@ -302,7 +305,13 @@ class JobQueue:
         try:
             # Run heavy generation handlers in a dedicated thread so the main
             # event loop can continue serving status/health polling requests.
-            result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
+            # Acquire the shared GPU lock (if set) to prevent concurrent VRAM
+            # access with the image generation endpoints.
+            if self.gpu_lock is not None:
+                async with self.gpu_lock:
+                    result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
+            else:
+                result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
             job.result = result
             job.status = JobStatus.COMPLETED
             job.progress = 100.0

@@ -47,3 +47,64 @@
 ## Notes
 - Long delays are expected for first-time heavy model loads (especially SD3.5 and Wan family).
 - Preemptible VM restarts can interrupt long tests; checkpointing after each major block avoids lost progress.
+
+## Carry-over TODO (Next Session)
+- [ ] Start VM and fetch fresh external IP
+- [ ] Verify `/health` and `/models` are reachable
+- [ ] Resume smoke test from video block (start with `wan-t2v-1.3b`)
+- [ ] Complete remaining video models (`wan-t2v-14b`, `wan-i2v-14b`, `ltx-video`)
+- [ ] Complete music models (`ace-step`, `audioldm2`, `stable-audio`)
+- [ ] Complete animation models (`liveportrait`, `echomimic`)
+- [ ] Record per-model pass/fail with error details for failed models
+- [ ] Stop VM after test to avoid billing
+
+---
+
+## Update - 2026-04-08 (Claude run checkpoint)
+
+### Verified Results (from Claude output)
+- `wan-t2v-1.3b`: PASS (~103s, job `cd2d515f`)
+- `wan-t2v-14b`: PASS (job `8f912753`)
+- `wan-i2v-14b`: FAIL (HuggingFace/cache download error during cold start)
+- `ltx-video`: started (no final result captured before session limit)
+
+### Interpretation
+- The confirmed failure in captured logs is **not** on `wan-t2v-14b`; it passed.
+- The failure happened on `wan-i2v-14b`, and appears transient network/cache related.
+
+### Remaining From This Checkpoint
+- [x] Re-run `wan-i2v-14b` — PASS (~331s, cache cold-start resolved on retry)
+- [x] Complete `ltx-video` — PASS (~278s)
+- [x] `ace-step` — PASS (~232s)
+- [x] `audioldm2` — PASS (~110s)
+- [x] `liveportrait` — PASS (~18s)
+- [x] `echomimic` — PASS (~18s)
+- [x] `stable-audio` — **FAIL** — 403 Client Error (HuggingFace gated model; not a transient issue)
+
+---
+
+## Final Smoke Test Summary (2026-04-08)
+
+| Category  | Model            | Status | Notes                                  |
+|-----------|------------------|--------|----------------------------------------|
+| Image     | flux-1-dev       | PASS   | (prev session)                         |
+| Image     | sd3.5-large      | PASS   | (prev session)                         |
+| Image     | realvisxl-v5     | PASS   | (prev session)                         |
+| Image     | juggernaut-xl    | PASS   | (prev session)                         |
+| Video     | wan-t2v-1.3b     | PASS   | ~103s                                  |
+| Video     | wan-t2v-14b      | PASS   | passes                                 |
+| Video     | wan-i2v-14b      | PASS   | ~331s cold-start; HF error on attempt1 was transient |
+| Video     | ltx-video        | PASS   | ~278s                                  |
+| Music     | ace-step         | PASS   | ~232s                                  |
+| Music     | audioldm2        | PASS   | ~110s                                  |
+| Music     | stable-audio     | **FAIL** | 403 HuggingFace model access denied — gated model, requires accepted ToS |
+| Animation | liveportrait     | PASS   | ~18s                                   |
+| Animation | echomimic        | PASS   | ~18s                                   |
+
+**Score: 12 PASS / 1 FAIL**
+
+### Action Required
+- `stable-audio` (`stabilityai/stable-audio-open-1.0`) requires HuggingFace gated access.
+  - Option A: Accept the model ToS on HF under the GCP VM's token account
+  - Option B: Replace model with `audioldm2` as the default audio fallback
+  - Option C: Remove `stable-audio` from the catalog if not needed
