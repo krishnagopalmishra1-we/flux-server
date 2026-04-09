@@ -97,20 +97,21 @@ class JobQueue:
     - Per-user job limits
     - Auto-cleanup of completed jobs after TTL
     - Thread-safe status tracking
+    - Real-time progress callbacks for SSE streaming
     """
 
     def __init__(
         self,
         max_queue_size: int = 50,
         max_per_user: int = 5,
-        result_ttl_seconds: float = 3600,  # Keep results for 1 hour
+        result_ttl_seconds: float = 3600,
     ):
         self.max_queue_size = max_queue_size
         self.max_per_user = max_per_user
         self.result_ttl = result_ttl_seconds
 
         self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=max_queue_size)
-        self._jobs: Dict[str, Job] = {}  # All jobs (active + completed)
+        self._jobs: Dict[str, Job] = {}
         self._lock = asyncio.Lock()
         self._handlers: Dict[str, JobHandler] = {}
         self._processing = False
@@ -118,6 +119,8 @@ class JobQueue:
         # Shared GPU lock — set by main.py after startup to serialize GPU access
         # with the image generation endpoints, preventing VRAM contention.
         self.gpu_lock: Optional[asyncio.Lock] = None
+        # Progress listeners: job_id -> list of asyncio.Queue for SSE subscribers
+        self._progress_listeners: Dict[str, List[asyncio.Queue]] = {}
 
         logger.info(
             f"JobQueue initialized (max_size={max_queue_size}, "
@@ -128,6 +131,36 @@ class JobQueue:
         """Register a handler function for a specific job type."""
         self._handlers[job_type] = handler
         logger.info(f"Registered handler for job type: {job_type}")
+
+    def set_progress(self, job_id: str, progress: float) -> None:
+        """Update job progress and notify any SSE listeners (called from worker thread)."""
+        job = self._jobs.get(job_id)
+        if job:
+            job.progress = min(100.0, max(0.0, progress))
+        # Notify SSE listeners — schedule on the event loop from a worker thread
+        listeners = self._progress_listeners.get(job_id)
+        if listeners:
+            for q in listeners:
+                try:
+                    q.put_nowait({"progress": progress, "status": job.status.value if job else "processing"})
+                except asyncio.QueueFull:
+                    pass
+
+    def subscribe_progress(self, job_id: str) -> asyncio.Queue:
+        """Subscribe to real-time progress updates for a job. Returns an asyncio.Queue."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=50)
+        if job_id not in self._progress_listeners:
+            self._progress_listeners[job_id] = []
+        self._progress_listeners[job_id].append(q)
+        return q
+
+    def unsubscribe_progress(self, job_id: str, q: asyncio.Queue) -> None:
+        """Remove an SSE subscriber queue."""
+        listeners = self._progress_listeners.get(job_id)
+        if listeners and q in listeners:
+            listeners.remove(q)
+        if not listeners:
+            self._progress_listeners.pop(job_id, None)
 
     async def submit(
         self,

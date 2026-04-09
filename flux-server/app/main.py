@@ -1,8 +1,9 @@
+import json
 import logging
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -38,10 +39,12 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════
 
 async def _handle_video_job(job) -> dict:
-    """Process a video generation job."""
+    """Process a video generation job with real-time progress reporting."""
     payload = job.payload
-    # Unload any image model first
     flux_pipeline.model_manager.unload_all()
+
+    def _progress(pct: float):
+        job_queue.set_progress(job.id, pct)
 
     if payload.get("source_image_b64"):
         return await video_pipeline.generate_image_to_video(
@@ -56,6 +59,7 @@ async def _handle_video_job(job) -> dict:
             lora_name=payload.get("lora_name"),
             lora_scale=payload.get("lora_scale", 1.0),
             job_id=job.id,
+            progress_callback=_progress,
         )
     else:
         return await video_pipeline.generate_text_to_video(
@@ -71,6 +75,7 @@ async def _handle_video_job(job) -> dict:
             lora_name=payload.get("lora_name"),
             lora_scale=payload.get("lora_scale", 1.0),
             job_id=job.id,
+            progress_callback=_progress,
         )
 
 
@@ -489,6 +494,99 @@ async def queue_status():
     """Get current queue statistics."""
     stats = job_queue.queue_stats()
     return QueueStatusResponse(**stats)
+
+
+# ═══════════════════════════════════════════════════
+#  SSE — Real-time job progress streaming
+# ═══════════════════════════════════════════════════
+
+@app.get("/api/jobs/{job_id}/stream")
+async def stream_job_progress(job_id: str, request: Request):
+    """
+    Server-Sent Events endpoint for real-time job progress.
+
+    Client connects once per job; receives JSON events:
+      data: {"progress": 42.5, "status": "processing"}
+      data: {"progress": 100.0, "status": "completed", "result": {...}}
+    Connection closes automatically on job completion/failure.
+    """
+    job = job_queue.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    async def event_generator():
+        q = job_queue.subscribe_progress(job_id)
+        try:
+            # Immediately send current state
+            current = job_queue.get_job(job_id)
+            if current:
+                payload = {"progress": current.progress, "status": current.status.value}
+                if current.status.value in ("completed", "failed"):
+                    payload["result"] = current.result
+                    payload["error"] = current.error_message
+                yield f"data: {json.dumps(payload)}\n\n"
+
+            # Stream updates until terminal state or client disconnect
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=1.0)
+                    # Re-fetch job for result payload on completion
+                    updated = job_queue.get_job(job_id)
+                    if updated and updated.status.value in ("completed", "failed"):
+                        event["result"] = updated.result
+                        event["error"] = updated.error_message
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event.get("status") in ("completed", "failed", "cancelled"):
+                        break
+                except asyncio.TimeoutError:
+                    # Heartbeat — keeps connection alive through proxies
+                    j = job_queue.get_job(job_id)
+                    if j:
+                        hb = {"progress": j.progress, "status": j.status.value}
+                        yield f"data: {json.dumps(hb)}\n\n"
+                        if j.status.value in ("completed", "failed", "cancelled"):
+                            break
+        finally:
+            job_queue.unsubscribe_progress(job_id, q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════
+#  VIDEO LORA ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+@app.get("/api/video/loras")
+async def list_video_loras():
+    """List LoRA files available for video models."""
+    loras = video_pipeline.get_available_loras()
+    return {"loras": loras, "count": len(loras)}
+
+
+@app.post("/api/video/loras/upload")
+async def upload_video_lora(file: UploadFile = File(...)):
+    """Upload a .safetensors LoRA adapter for video models."""
+    if not file.filename.endswith(".safetensors"):
+        raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
+    safe_name = Path(file.filename).name
+    from app.pipelines.video_pipeline import VIDEO_LORA_DIR
+    VIDEO_LORA_DIR.mkdir(exist_ok=True)
+    dest = VIDEO_LORA_DIR / safe_name
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    dest.write_bytes(contents)
+    logger.info("Video LoRA uploaded: %s (%d bytes)", safe_name, len(contents))
+    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents)}
 
 
 # ═══════════════════════════════════════════════════

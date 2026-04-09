@@ -472,17 +472,26 @@ class MultiModelManager:
                 logger.info(f"Moving {model_name} to {self.device}...")
                 pipe.to(self.device)
             
+            # Enable PyTorch 2.x FlashAttention-2 / SDP backends
+            if torch.cuda.is_available():
+                torch.backends.cuda.enable_flash_sdp(True)
+                torch.backends.cuda.enable_mem_efficient_sdp(True)
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+
             # Enable memory optimizations
             if hasattr(pipe, 'enable_attention_slicing'):
-                pipe.enable_attention_slicing()
+                pipe.enable_attention_slicing(1)
             if hasattr(pipe, 'enable_vae_slicing'):
                 pipe.enable_vae_slicing()
-            
+            if hasattr(pipe, 'enable_vae_tiling'):
+                pipe.enable_vae_tiling()
+
             # Store and track
             self.pipelines[model_name] = pipe
             self.lru_cache.append(model_name)
             self.current_model = model_name
-            
+
             gpu_info = self.gpu_info()
             logger.info(f"✅ {model_name} loaded successfully")
             logger.info(f"GPU: Used: {gpu_info['used_gb']:.1f}GB / {gpu_info['total_gb']:.1f}GB")

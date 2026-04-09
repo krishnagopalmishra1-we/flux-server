@@ -525,9 +525,12 @@ textarea.compact { min-height: 88px; }
 .video-container video {
   width: 100%;
   display: block;
-  max-height: 520px;
+  max-height: 560px;
   background: #000;
+  border-radius: 0;
 }
+
+.video-container video:focus { outline: none; }
 
 .audio-container {
   padding: 24px;
@@ -539,6 +542,15 @@ textarea.compact { min-height: 88px; }
 .audio-container audio {
   width: 100%;
   border-radius: 12px;
+  accent-color: var(--brand);
+}
+
+/* ─── Loading spinner improvements ────────────────── */
+
+.loading-spinner span {
+  text-align: center;
+  max-width: 240px;
+  line-height: 1.5;
 }
 
 /* ─── Dropzone (File Upload) ───────────────────────── */
@@ -863,13 +875,43 @@ textarea.compact { min-height: 88px; }
   height: 100%;
   border-radius: 4px;
   background: linear-gradient(90deg, var(--brand), var(--brand-2));
-  transition: width 0.5s ease;
+  transition: width 0.4s ease;
   animation: progressGlow 2s ease-in-out infinite;
 }
 
 @keyframes progressGlow {
   0%, 100% { opacity: 0.8; }
   50%      { opacity: 1; }
+}
+
+.job-progress-label {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--brand);
+  font-weight: 600;
+  font-family: "Space Grotesk", sans-serif;
+}
+
+/* ─── Inline progress track (inside canvas spinner) ── */
+
+.progress-track {
+  width: 200px;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(83, 213, 255, 0.12);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--brand), var(--brand-2));
+  transition: width 0.4s ease;
+}
+
+.error-state {
+  color: var(--danger) !important;
 }
 
 .job-result-link {

@@ -78,19 +78,40 @@ class InferencePipeline:
         return refiner
 
     def load(self, model_name: str = "flux-1-dev") -> None:
-        """Load a model onto the GPU."""
+        """Load a model onto the GPU with optional torch.compile acceleration."""
         logger.info(f"Loading model: {model_name}")
         settings = get_settings()
         logger.info(f"Cache dir: {settings.cache_dir}")
         logger.info(f"HF token present: {bool(settings.hf_token)}")
         logger.info(f"Device: {self.device}")
-        
+
+        # Enable PyTorch 2.x FlashAttention-2 / SDP kernels globally
+        if torch.cuda.is_available():
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+
         try:
             self.model_manager.load(model_name)
-            
-            # Warmup pass — ensures CUDA kernels are compiled
-            logger.info("Running warmup inference...")
             pipe = self.model_manager.get_pipeline(model_name)
+
+            # Attempt torch.compile on non-quantized transformers for ~20% speedup
+            # after warm-up. Skip BnB quantized models (incompatible graph capture).
+            transformer = getattr(pipe, "transformer", None)
+            is_quantized = getattr(transformer, "is_quantized", False) if transformer else True
+            if transformer is not None and not is_quantized:
+                try:
+                    logger.info("  Applying torch.compile to image transformer...")
+                    pipe.transformer = torch.compile(
+                        transformer,
+                        mode="reduce-overhead",
+                        fullgraph=False,
+                    )
+                    logger.info("  ✓ torch.compile applied")
+                except Exception as ce:
+                    logger.warning(f"  torch.compile skipped: {ce}")
+
+            # Warmup pass — triggers kernel compilation and cache warm
+            logger.info("Running warmup inference pass...")
             with torch.no_grad():
                 pipe(
                     prompt="warmup",
@@ -100,7 +121,7 @@ class InferencePipeline:
                     output_type="latent",
                 )
             torch.cuda.empty_cache()
-            logger.info(f"Model {model_name} loaded and warmed up successfully!")
+            logger.info(f"✅ {model_name} loaded, compiled, and warmed up")
         except Exception as e:
             logger.exception(f"Failed to load model: {e}")
             raise

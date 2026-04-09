@@ -1,39 +1,46 @@
 setuptools>=70.0
+
+# ── Core inference stack ─────────────────────────────
 torch==2.5.1
+# FlashAttention-2 ships inside PyTorch 2.x via scaled_dot_product_attention.
+# Install flash-attn separately only if you want the standalone C++ kernel:
+#   pip install flash-attn --no-build-isolation
 diffusers==0.35.1
 transformers==4.44.2
 accelerate==0.33.0
-bitsandbytes==0.43.3
-peft==0.17.0
+bitsandbytes==0.43.3        # NF4 double-quantization for 14B models
+peft==0.17.0                # LoRA adapter loading via PEFT
 safetensors==0.4.4
 sentencepiece==0.2.0
 protobuf==4.25.4
+
+# ── Web server ───────────────────────────────────────
 fastapi==0.111.1
 uvicorn[standard]==0.30.6
 gunicorn==22.0.0
 pydantic-settings==2.4.0
 python-multipart==0.0.9
-Pillow==10.4.0
-huggingface-hub==0.35.0
-gradio==4.44.1
-requests==2.32.3
-pandas==2.2.2
-tqdm==4.66.5
+sse-starlette>=1.6.5        # Server-Sent Events (SSE) streaming support
 
-# Video generation — ftfy required by Wan tokenizer text normalization
-ftfy==6.2.3
-imageio[ffmpeg]==2.35.1
+# ── Image / Video ────────────────────────────────────
+Pillow==10.4.0
+ftfy==6.2.3                 # Wan tokenizer text normalization
+imageio[ffmpeg]==2.35.1     # MP4 export (libx264 via ffmpeg)
 opencv-python-headless==4.10.0.84
 numpy==1.26.4
 scipy==1.13.1
 einops==0.8.0
 
-# Music generation
+# ── Audio / Music ────────────────────────────────────
 soundfile==0.12.1
 librosa==0.10.2.post1
 
-# Animation
+# ── Animation ────────────────────────────────────────
 face-alignment==1.4.1
 
-# General utilities
+# ── HuggingFace / misc ───────────────────────────────
+huggingface-hub==0.35.0
+requests==2.32.3
+pandas==2.2.2
+tqdm==4.66.5
 aiofiles==23.2.1
