@@ -8,6 +8,7 @@ multiple users. Designed for FastAPI BackgroundTasks integration.
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -119,8 +120,13 @@ class JobQueue:
         # Shared GPU lock — set by main.py after startup to serialize GPU access
         # with the image generation endpoints, preventing VRAM contention.
         self.gpu_lock: Optional[asyncio.Lock] = None
-        # Progress listeners: job_id -> list of asyncio.Queue for SSE subscribers
+        # Progress listeners: job_id -> list of asyncio.Queue for SSE subscribers.
+        # Protected by _listeners_lock because set_progress is called from worker threads.
         self._progress_listeners: Dict[str, List[asyncio.Queue]] = {}
+        self._listeners_lock = threading.Lock()
+        # Event loop reference — captured when the worker starts so worker threads
+        # can schedule put_nowait via call_soon_threadsafe.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         logger.info(
             f"JobQueue initialized (max_size={max_queue_size}, "
@@ -133,34 +139,50 @@ class JobQueue:
         logger.info(f"Registered handler for job type: {job_type}")
 
     def set_progress(self, job_id: str, progress: float) -> None:
-        """Update job progress and notify any SSE listeners (called from worker thread)."""
+        """Update job progress and notify SSE listeners. Safe to call from worker threads."""
+        clamped = min(100.0, max(0.0, progress))
         job = self._jobs.get(job_id)
         if job:
-            job.progress = min(100.0, max(0.0, progress))
-        # Notify SSE listeners — schedule on the event loop from a worker thread
-        listeners = self._progress_listeners.get(job_id)
-        if listeners:
+            job.progress = clamped
+
+        # Schedule queue puts on the event loop — put_nowait is not thread-safe from
+        # a worker thread, so we use call_soon_threadsafe to hand off to the loop.
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            return
+
+        status = job.status.value if job else "processing"
+        event = {"progress": clamped, "status": status}
+
+        with self._listeners_lock:
+            listeners = list(self._progress_listeners.get(job_id, []))
+
+        def _put_all():
             for q in listeners:
                 try:
-                    q.put_nowait({"progress": progress, "status": job.status.value if job else "processing"})
+                    q.put_nowait(event)
                 except asyncio.QueueFull:
                     pass
+
+        loop.call_soon_threadsafe(_put_all)
 
     def subscribe_progress(self, job_id: str) -> asyncio.Queue:
         """Subscribe to real-time progress updates for a job. Returns an asyncio.Queue."""
         q: asyncio.Queue = asyncio.Queue(maxsize=50)
-        if job_id not in self._progress_listeners:
-            self._progress_listeners[job_id] = []
-        self._progress_listeners[job_id].append(q)
+        with self._listeners_lock:
+            if job_id not in self._progress_listeners:
+                self._progress_listeners[job_id] = []
+            self._progress_listeners[job_id].append(q)
         return q
 
     def unsubscribe_progress(self, job_id: str, q: asyncio.Queue) -> None:
         """Remove an SSE subscriber queue."""
-        listeners = self._progress_listeners.get(job_id)
-        if listeners and q in listeners:
-            listeners.remove(q)
-        if not listeners:
-            self._progress_listeners.pop(job_id, None)
+        with self._listeners_lock:
+            listeners = self._progress_listeners.get(job_id)
+            if listeners and q in listeners:
+                listeners.remove(q)
+            if not listeners:
+                self._progress_listeners.pop(job_id, None)
 
     async def submit(
         self,
@@ -291,6 +313,8 @@ class JobQueue:
     def _ensure_worker(self) -> None:
         """Start the background worker if not running."""
         if self._worker_task is None or self._worker_task.done():
+            # Capture the running event loop so worker threads can use call_soon_threadsafe.
+            self._loop = asyncio.get_event_loop()
             self._worker_task = asyncio.create_task(self._worker_loop())
 
     async def _worker_loop(self) -> None:
@@ -365,7 +389,7 @@ class JobQueue:
         return asyncio.run(handler(job))
 
     def _cleanup_expired(self) -> None:
-        """Remove completed/failed jobs older than TTL."""
+        """Remove completed/failed jobs older than TTL and prune their listener entries."""
         now = time.time()
         expired_ids = [
             job_id
@@ -376,7 +400,11 @@ class JobQueue:
         ]
         for job_id in expired_ids:
             del self._jobs[job_id]
+        # Prune listener entries for expired jobs so the dict doesn't grow unboundedly.
         if expired_ids:
+            with self._listeners_lock:
+                for job_id in expired_ids:
+                    self._progress_listeners.pop(job_id, None)
             logger.info(f"Cleaned up {len(expired_ids)} expired jobs")
 
 

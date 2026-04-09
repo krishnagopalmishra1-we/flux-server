@@ -98,7 +98,9 @@ class InferencePipeline:
             # after warm-up. Skip BnB quantized models (incompatible graph capture).
             transformer = getattr(pipe, "transformer", None)
             is_quantized = getattr(transformer, "is_quantized", False) if transformer else True
-            if transformer is not None and not is_quantized:
+            if transformer is None or is_quantized:
+                compilation_status = "skipped (quantized or no transformer)"
+            else:
                 try:
                     logger.info("  Applying torch.compile to image transformer...")
                     pipe.transformer = torch.compile(
@@ -106,8 +108,10 @@ class InferencePipeline:
                         mode="reduce-overhead",
                         fullgraph=False,
                     )
+                    compilation_status = "compiled"
                     logger.info("  ✓ torch.compile applied")
                 except Exception as ce:
+                    compilation_status = "compile failed"
                     logger.warning(f"  torch.compile skipped: {ce}")
 
             # Warmup pass — triggers kernel compilation and cache warm
@@ -121,7 +125,7 @@ class InferencePipeline:
                     output_type="latent",
                 )
             torch.cuda.empty_cache()
-            logger.info(f"✅ {model_name} loaded, compiled, and warmed up")
+            logger.info(f"✅ {model_name} loaded ({compilation_status}), warmed up")
         except Exception as e:
             logger.exception(f"Failed to load model: {e}")
             raise

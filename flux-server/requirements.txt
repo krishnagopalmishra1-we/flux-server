@@ -20,7 +20,7 @@ uvicorn[standard]==0.30.6
 gunicorn==22.0.0
 pydantic-settings==2.4.0
 python-multipart==0.0.9
-sse-starlette>=1.6.5        # Server-Sent Events (SSE) streaming support
+sse-starlette==1.6.5        # Server-Sent Events (SSE) streaming support
 
 # ── Image / Video ────────────────────────────────────
 Pillow==10.4.0

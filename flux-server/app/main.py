@@ -521,7 +521,7 @@ async def stream_job_progress(job_id: str, request: Request):
             current = job_queue.get_job(job_id)
             if current:
                 payload = {"progress": current.progress, "status": current.status.value}
-                if current.status.value in ("completed", "failed"):
+                if current.status.value in ("completed", "failed", "cancelled"):
                     payload["result"] = current.result
                     payload["error"] = current.error_message
                 yield f"data: {json.dumps(payload)}\n\n"
@@ -534,7 +534,7 @@ async def stream_job_progress(job_id: str, request: Request):
                     event = await asyncio.wait_for(q.get(), timeout=1.0)
                     # Re-fetch job for result payload on completion
                     updated = job_queue.get_job(job_id)
-                    if updated and updated.status.value in ("completed", "failed"):
+                    if updated and updated.status.value in ("completed", "failed", "cancelled"):
                         event["result"] = updated.result
                         event["error"] = updated.error_message
                     yield f"data: {json.dumps(event)}\n\n"
@@ -578,6 +578,12 @@ async def upload_video_lora(file: UploadFile = File(...)):
     if not file.filename.endswith(".safetensors"):
         raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
     safe_name = Path(file.filename).name
+    if (
+        not safe_name
+        or ".." in safe_name
+        or safe_name != file.filename.replace("\\", "/").split("/")[-1]
+    ):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
     from app.pipelines.video_pipeline import VIDEO_LORA_DIR
     VIDEO_LORA_DIR.mkdir(exist_ok=True)
     dest = VIDEO_LORA_DIR / safe_name

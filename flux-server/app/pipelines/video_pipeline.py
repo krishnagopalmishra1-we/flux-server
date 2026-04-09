@@ -94,7 +94,7 @@ class VideoPipeline:
             f"{class_name} not available. Upgrade diffusers to a Wan/LTX-capable version."
         )
 
-    def _apply_memory_opts(self, quantized: bool = False) -> None:
+    def _apply_memory_opts(self) -> None:
         """Apply all safe memory optimizations to self._pipe."""
         p = self._pipe
         if p is None:
@@ -103,12 +103,10 @@ class VideoPipeline:
             p.enable_vae_slicing()
         if hasattr(p, "enable_vae_tiling"):
             p.enable_vae_tiling()
-        # Prefer PyTorch 2.x SDP (FlashAttention-2 backend) over xFormers.
-        # enable_xformers is kept as a fallback only.
         if hasattr(p, "enable_attention_slicing"):
             p.enable_attention_slicing(1)
-        # Attempt xFormers only if SDP-based FA2 isn't available
-        if not getattr(torch.backends.cuda, "enable_flash_sdp", lambda: True)():
+        # Attempt xFormers only when PyTorch 2.x FlashAttention-2 SDP is not active.
+        if not torch.backends.cuda.flash_sdp_enabled():
             if hasattr(p, "enable_xformers_memory_efficient_attention"):
                 try:
                     p.enable_xformers_memory_efficient_attention()
@@ -146,7 +144,10 @@ class VideoPipeline:
         try:
             from transformers import BitsAndBytesConfig
         except ImportError:
-            from bitsandbytes import BitsAndBytesConfig
+            raise ImportError(
+                "transformers is required for NF4 quantization. "
+                "Install it with: pip install transformers>=4.40"
+            )
         return BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -215,7 +216,7 @@ class VideoPipeline:
             self._pipe = WanPipeline.from_pretrained(model_id, **load_kwargs)
             self._pipe.to(self.device)
 
-        self._apply_memory_opts(quantized=quantize)
+        self._apply_memory_opts()
         if not quantize:
             self._try_compile_transformer()
 
@@ -244,7 +245,7 @@ class VideoPipeline:
         for name, component in self._pipe.components.items():
             if name != "transformer" and hasattr(component, "to"):
                 component.to(self.device)
-        self._apply_memory_opts(quantized=True)
+        self._apply_memory_opts()
 
     def _load_ltx_video(self, model_id: str, settings) -> None:
         LTXPipeline = self._resolve_pipeline_class(
@@ -256,7 +257,7 @@ class VideoPipeline:
             load_kwargs["token"] = settings.hf_token
         self._pipe = LTXPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipe.to(self.device)
-        self._apply_memory_opts(quantized=False)
+        self._apply_memory_opts()
         self._try_compile_transformer()
 
     # ──────────────────────────────────────────────
@@ -405,6 +406,7 @@ class VideoPipeline:
                     guidance_scale=guidance_scale,
                     num_inference_steps=num_inference_steps,
                     generator=generator,
+                    callback_on_step_end=_step_cb,
                 )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -501,6 +503,7 @@ class VideoPipeline:
                     guidance_scale=guidance_scale,
                     num_inference_steps=num_inference_steps,
                     generator=generator,
+                    callback_on_step_end=_step_cb,
                 )
 
         elapsed_ms = (time.perf_counter() - start) * 1000

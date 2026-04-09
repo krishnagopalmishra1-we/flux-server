@@ -530,7 +530,8 @@ textarea.compact { min-height: 88px; }
   border-radius: 0;
 }
 
-.video-container video:focus { outline: none; }
+.video-container video:focus:not(:focus-visible) { outline: none; }
+.video-container video:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 .audio-container {
   padding: 24px;
