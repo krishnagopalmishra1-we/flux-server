@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import hashlib
 from app.schemas import GenerateRequest, GenerateResponse, HealthResponse
 from app.schemas_v2 import (
     VideoGenerateRequest, VideoGenerateResponse,
@@ -37,6 +38,11 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════
 #  JOB HANDLERS — Connect job queue to pipelines
 # ═══════════════════════════════════════════════════
+
+def get_user_id(request: Request) -> str:
+    """Hash the client IP to a stable, non-PII identifier."""
+    host = request.client.host if request.client else "unknown"
+    return hashlib.sha256(f"app_salt_{host}".encode()).hexdigest()[:16]
 
 async def _handle_video_job(job) -> dict:
     """Process a video generation job with real-time progress reporting."""
@@ -363,7 +369,7 @@ async def generate_video(req: VideoGenerateRequest, request: Request):
             model_name=req.model_name,
             payload=req.model_dump(),
             priority=JobPriority.SLOW,
-            user_id=request.client.host,
+            user_id=get_user_id(request),
         )
     except ValueError as e:
         raise HTTPException(status_code=429, detail=str(e))
@@ -396,7 +402,7 @@ async def generate_music(req: MusicGenerateRequest, request: Request):
             model_name=req.model_name,
             payload=req.model_dump(),
             priority=JobPriority.FAST,
-            user_id=request.client.host,
+            user_id=get_user_id(request),
         )
     except ValueError as e:
         raise HTTPException(status_code=429, detail=str(e))
@@ -429,7 +435,7 @@ async def generate_animation(req: AnimationGenerateRequest, request: Request):
             model_name=req.model_name,
             payload=req.model_dump(),
             priority=JobPriority.NORMAL,
-            user_id=request.client.host,
+            user_id=get_user_id(request),
         )
     except ValueError as e:
         raise HTTPException(status_code=429, detail=str(e))
@@ -472,7 +478,7 @@ async def get_job_status(job_id: str):
 @app.get("/api/jobs")
 async def list_jobs(request: Request, status: str = None, limit: int = 20):
     """List recent jobs for the current user."""
-    user_id = request.client.host
+    user_id = get_user_id(request)
     status_filter = JobStatus(status) if status else None
     jobs = job_queue.list_jobs(user_id=user_id, status=status_filter, limit=limit)
     return {"jobs": jobs, "total": len(jobs)}

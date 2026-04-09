@@ -1,0 +1,12 @@
+{
+    "job_id": "f67a3d5b-8609-4dd7-9058-91ffe5e69fcf",
+    "job_type": "video",
+    "model_name": "wan-t2v-14b",
+    "status": "processing",
+    "progress": 53.826141679286955,
+    "result": {},
+    "error_message": "",
+    "queue_position": -1,
+    "queue_time_ms": 0.6558895111083984,
+    "processing_time_ms": 1076522.8335857391
+}

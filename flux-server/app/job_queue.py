@@ -52,6 +52,7 @@ class Job:
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
+    last_updated_at: float = field(default_factory=time.time)
 
     @property
     def queue_time_ms(self) -> float:
@@ -117,6 +118,7 @@ class JobQueue:
         self._handlers: Dict[str, JobHandler] = {}
         self._processing = False
         self._worker_task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
         # Shared GPU lock — set by main.py after startup to serialize GPU access
         # with the image generation endpoints, preventing VRAM contention.
         self.gpu_lock: Optional[asyncio.Lock] = None
@@ -144,6 +146,7 @@ class JobQueue:
         job = self._jobs.get(job_id)
         if job:
             job.progress = clamped
+            job.last_updated_at = time.time()
 
         # Schedule queue puts on the event loop — put_nowait is not thread-safe from
         # a worker thread, so we use call_soon_threadsafe to hand off to the loop.
@@ -316,6 +319,34 @@ class JobQueue:
             # Capture the running event loop so worker threads can use call_soon_threadsafe.
             self._loop = asyncio.get_event_loop()
             self._worker_task = asyncio.create_task(self._worker_loop())
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+
+    async def _watchdog_loop(self) -> None:
+        """Monitor processing jobs for stalled pipelines."""
+        while True:
+            await asyncio.sleep(60.0)
+            now = time.time()
+            timeout_seconds = 900.0  # Stalled if no progress update for 15 minutes
+            for job in list(self._jobs.values()):
+                if job.status == JobStatus.PROCESSING:
+                    if (now - getattr(job, 'last_updated_at', job.started_at or now)) > timeout_seconds:
+                        logger.error(f"Watchdog: Job {job.id} stalled! No progress for {timeout_seconds}s.")
+                        job.status = JobStatus.FAILED
+                        job.error_message = f"Job stalled (watchdog timeout after {timeout_seconds}s without progress)."
+                        job.completed_at = now
+                        
+                        # Notify subscribers about failure
+                        status_event = {"progress": job.progress, "status": "failed", "error": job.error_message}
+                        with self._listeners_lock:
+                            listeners = list(self._progress_listeners.get(job.id, []))
+                        def _put_all():
+                            for q in listeners:
+                                try:
+                                    q.put_nowait(status_event)
+                                except asyncio.QueueFull:
+                                    pass
+                        if self._loop and self._loop.is_running():
+                            self._loop.call_soon_threadsafe(_put_all)
 
     async def _worker_loop(self) -> None:
         """Background worker that processes jobs sequentially."""
@@ -357,6 +388,7 @@ class JobQueue:
 
         job.status = JobStatus.PROCESSING
         job.started_at = time.time()
+        job.last_updated_at = time.time()
         logger.info(f"Processing job: {job.id[:8]}... (type={job.job_type}, model={job.model_name})")
 
         try:
