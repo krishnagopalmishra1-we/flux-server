@@ -23,3 +23,16 @@ loras/
 
 # Editor/local settings
 .vscode/
+
+# Temporary and local debugging logs / artifacts
+error.txt
+error*.txt
+*error*.txt
+*logs.txt
+*.log
+jobs_status*.json
+job_detail*.json
+fix_fixtures.py
+
+# Assets not stored in git
+video_loras/
