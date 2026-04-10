@@ -7,7 +7,7 @@ services:
     volumes:
       # HDD — all video/music/animation models (WAN 14B=118G, I2V 14B=118G etc.)
       - /mnt/hf-cache-disk:/mnt/hf-cache
-      # SSD — FLUX.1-dev only (32G). Stored in a Docker named volume on the boot disk.
+      # SSD — FLUX.1-dev (32G) + HunyuanVideo NF4 (~20G) = ~52G on 128G free SSD.
       # Add more models here only if their on-disk checkpoint fits the ~128G SSD budget.
       - model_cache_ssd:/app/model_cache
       - outputs:/mnt/outputs
