@@ -317,7 +317,7 @@ class JobQueue:
         """Start the background worker if not running."""
         if self._worker_task is None or self._worker_task.done():
             # Capture the running event loop so worker threads can use call_soon_threadsafe.
-            self._loop = asyncio.get_event_loop()
+            self._loop = asyncio.get_running_loop()
             self._worker_task = asyncio.create_task(self._worker_loop())
             self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
@@ -326,7 +326,7 @@ class JobQueue:
         while True:
             await asyncio.sleep(60.0)
             now = time.time()
-            timeout_seconds = 1800.0  # 30 min — allows first-time 14B model download (~28GB) + load
+            timeout_seconds = 3600.0  # 60 min — allows first-time 14B model download (~28GB) + load
             for job in list(self._jobs.values()):
                 if job.status == JobStatus.PROCESSING:
                     if (now - getattr(job, 'last_updated_at', job.started_at or now)) > timeout_seconds:

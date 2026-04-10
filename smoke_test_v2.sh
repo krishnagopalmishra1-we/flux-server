@@ -6,9 +6,9 @@ BASE="http://localhost:8080"
 PASS=0; FAIL=0; WARN=0
 
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
-pass() { echo "[PASS] $*"; ((PASS++)); }
-fail() { echo "[FAIL] $*"; ((FAIL++)); }
-warn() { echo "[WARN] $*"; ((WARN++)); }
+pass() { echo "[PASS] $*"; PASS=$((PASS+1)); return 0; }
+fail() { echo "[FAIL] $*"; FAIL=$((FAIL+1)); return 0; }
+warn() { echo "[WARN] $*"; WARN=$((WARN+1)); return 0; }
 
 # ── PHASE 1: GPU & System ─────────────────────────────────────────────────────
 log "=== PHASE 1: GPU & SYSTEM HEALTH ==="

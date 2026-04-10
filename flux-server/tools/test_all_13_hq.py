@@ -108,8 +108,8 @@ def test_image(base_url, model_name):
                 f.write(base64.b64decode(img_b64))
             log(f"[IMAGE] PASS OK {model_name} (Saved: {path})")
             return {"status": "PASS", "details": "Generated and saved"}
-        log(f"[IMAGE] PASS (no image_base64) {model_name}: {body}")
-        return {"status": "PASS", "details": "No image returned"}
+        log(f"[IMAGE] FAIL {model_name}: 200 OK but no image_base64 in response: {body}")
+        return {"status": "FAIL", "details": "No image returned"}
     else:
         log(f"[IMAGE] FAIL {model_name}: {body}")
         return {"status": "FAIL", "error": body}
@@ -215,7 +215,7 @@ def test_animation(base_url, model_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--server", default="http://104.198.24.103:8080")
+    parser.add_argument("--server", required=True, help="Base URL of the Neural Creation Studio server (e.g. http://localhost:8080)")
     parser.add_argument("--shutdown", action="store_true", help="Shut down VM after testing")
     args = parser.parse_args()
     base = args.server.rstrip("/")

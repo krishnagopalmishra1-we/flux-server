@@ -510,15 +510,7 @@ class MultiModelManager:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-
-            # Attempt fallback to a known-good model
-            fallback = "flux-1-dev"
-            if model_name != fallback and fallback not in self.pipelines:
-                logger.warning(f"Attempting fallback to {fallback} after {model_name} failed...")
-                try:
-                    self.load(fallback)
-                except Exception:
-                    logger.error(f"Fallback to {fallback} also failed")
+                torch.cuda.synchronize()
 
             err_text = str(e)
             if "gated" in err_text.lower() or "403" in err_text:
@@ -549,11 +541,14 @@ class MultiModelManager:
     def unload_all(self) -> None:
         """Unload all models and free VRAM."""
         for model_name in list(self.pipelines.keys()):
-            del self.pipelines[model_name]
+            self._unload_model(model_name)
         self.lru_cache.clear()
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        logger.info("All models unloaded, VRAM freed")
+            torch.cuda.synchronize()
+        gpu = self.gpu_info()
+        logger.info(f"All models unloaded. GPU: {gpu['used_gb']:.1f}GB / {gpu['total_gb']:.1f}GB")
     
     def get_model_info(self, model_name: str) -> Dict:
         """Get detailed info about a model."""
