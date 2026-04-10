@@ -45,15 +45,27 @@ def get_user_id(request: Request) -> str:
     return hashlib.sha256(f"app_salt_{host}".encode()).hexdigest()[:16]
 
 async def _handle_video_job(job) -> dict:
-    """Process a video generation job with real-time progress reporting."""
+    """Process a video generation job with real-time progress reporting.
+
+    Video pipelines call blocking model-load and inference code. Running them
+    directly in the async handler blocks the event loop for 10-30 min, which
+    prevents the watchdog task from ticking and breaks call_soon_threadsafe
+    from the keepalive thread. We run the sync work in a thread executor so
+    the event loop stays free.
+    """
+    import functools
     payload = job.payload
     flux_pipeline.model_manager.unload_all()
 
     def _progress(pct: float):
         job_queue.set_progress(job.id, pct)
 
+    loop = asyncio.get_event_loop()
+
     if payload.get("source_image_b64"):
-        return await video_pipeline.generate_image_to_video(
+        fn = functools.partial(
+            _run_sync,
+            video_pipeline.generate_image_to_video,
             source_image_b64=payload["source_image_b64"],
             prompt=payload.get("prompt", ""),
             model_name=job.model_name,
@@ -68,7 +80,9 @@ async def _handle_video_job(job) -> dict:
             progress_callback=_progress,
         )
     else:
-        return await video_pipeline.generate_text_to_video(
+        fn = functools.partial(
+            _run_sync,
+            video_pipeline.generate_text_to_video,
             prompt=payload["prompt"],
             model_name=job.model_name,
             negative_prompt=payload.get("negative_prompt", ""),
@@ -83,6 +97,22 @@ async def _handle_video_job(job) -> dict:
             job_id=job.id,
             progress_callback=_progress,
         )
+    return await loop.run_in_executor(None, fn)
+
+
+def _run_sync(coro_fn, **kwargs):
+    """Run an async coroutine synchronously in a thread-executor context.
+
+    asyncio.run_in_executor dispatches to a ThreadPoolExecutor, which cannot
+    await coroutines. This helper creates a new event loop for the thread,
+    runs the coroutine to completion, and closes it.
+    """
+    import asyncio as _asyncio
+    loop = _asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro_fn(**kwargs))
+    finally:
+        loop.close()
 
 
 async def _handle_music_job(job) -> dict:

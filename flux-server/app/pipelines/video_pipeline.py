@@ -115,7 +115,11 @@ class VideoPipeline:
                     pass
 
     def _try_compile_transformer(self) -> None:
-        """Apply torch.compile to the transformer on non-quantized pipelines."""
+        """Apply torch.compile to the transformer on non-quantized pipelines.
+
+        Requires a C compiler (gcc/cc) for the inductor backend. Silently skips
+        if no compiler is available (common in minimal containers).
+        """
         if self._compiled:
             return
         if self._pipe is None:
@@ -126,7 +130,12 @@ class VideoPipeline:
         # Do NOT compile quantized (BitsAndBytes) models — they use custom kernels
         # that are incompatible with torch.compile graph capture.
         if hasattr(transformer, "is_quantized") and transformer.is_quantized:
-            logger.info("  ⚠ Skipping torch.compile — quantized transformer")
+            logger.info("  Skipping torch.compile — quantized transformer")
+            return
+        # torch.compile inductor backend requires gcc/cc. Skip gracefully if absent.
+        import shutil
+        if shutil.which("gcc") is None and shutil.which("cc") is None:
+            logger.info("  Skipping torch.compile — no C compiler found (gcc/cc)")
             return
         try:
             logger.info("  Compiling transformer with torch.compile(reduce-overhead)...")
@@ -136,7 +145,7 @@ class VideoPipeline:
                 fullgraph=False,
             )
             self._compiled = True
-            logger.info("  ✓ torch.compile applied to transformer")
+            logger.info("  torch.compile applied to transformer")
         except Exception as e:
             logger.warning(f"  torch.compile skipped: {e}")
 
@@ -159,30 +168,48 @@ class VideoPipeline:
     #  Model Loading
     # ──────────────────────────────────────────────
 
-    def load_model(self, model_name: str) -> None:
+    def load_model(self, model_name: str, progress_callback: Optional[Callable[[float], None]] = None) -> None:
         if self._current_model == model_name and self._pipe is not None:
             return
-        self.unload()
-        settings = get_settings()
-        logger.info(f"Loading video model: {model_name}")
+
+        import threading
+        stop_event = threading.Event()
+        def keepalive():
+            while not stop_event.wait(30.0):
+                if progress_callback:
+                    progress_callback(2.0)
+                    
+        keepalive_thread = threading.Thread(target=keepalive)
+        keepalive_thread.daemon = True
+        keepalive_thread.start()
+
         try:
-            if model_name == "wan-t2v-1.3b":
-                self._load_wan_t2v("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", quantize=False, settings=settings)
-            elif model_name == "wan-t2v-14b":
-                self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=True, settings=settings)
-            elif model_name == "wan-i2v-14b":
-                self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", settings=settings)
-            elif model_name == "ltx-video":
-                self._load_ltx_video("Lightricks/LTX-Video", settings=settings)
-            else:
-                raise ValueError(f"Unknown video model: {model_name}")
-            self._current_model = model_name
-            gpu = self._gpu_mb()
-            logger.info(f"✅ {model_name} loaded | VRAM used: {gpu:.0f} MB")
-        except Exception as e:
-            logger.exception(f"Failed to load video model {model_name}: {e}")
             self.unload()
-            raise
+            settings = get_settings()
+            logger.info(f"Loading video model: {model_name}")
+            try:
+                if model_name == "wan-t2v-1.3b":
+                    self._load_wan_t2v("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", quantize=False, settings=settings)
+                elif model_name == "wan-t2v-14b":
+                    # NF4 double-quantization: transformer ~7-8 GB vs ~28 GB BF16.
+                    # Required on A100 40GB — BF16 14B OOMs at 49 frames (38.76 GB).
+                    self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=True, settings=settings)
+                elif model_name == "wan-i2v-14b":
+                    self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", settings=settings)
+                elif model_name == "ltx-video":
+                    self._load_ltx_video("Lightricks/LTX-Video", settings=settings)
+                else:
+                    raise ValueError(f"Unknown video model: {model_name}")
+                self._current_model = model_name
+                gpu = self._gpu_mb()
+                logger.info(f"✅ {model_name} loaded | VRAM used: {gpu:.0f} MB")
+            except Exception as e:
+                logger.exception(f"Failed to load video model {model_name}: {e}")
+                self.unload()
+                raise
+        finally:
+            stop_event.set()
+            keepalive_thread.join(timeout=1.0)
 
     def _load_wan_t2v(self, model_id: str, quantize: bool, settings) -> None:
         WanPipeline = self._resolve_pipeline_class(
@@ -194,6 +221,8 @@ class VideoPipeline:
             load_kwargs["token"] = settings.hf_token
 
         if quantize:
+            # NF4 double-quantization: ~7-8 GB vs ~28 GB BF16 — required for 14B on A100 40GB.
+            # All non-transformer components go to GPU in BF16 for full tensor-core speed.
             logger.info(f"  Loading {model_id} transformer with NF4 double-quantization...")
             nf4 = self._make_nf4_config()
             try:
@@ -206,13 +235,15 @@ class VideoPipeline:
                 cache_dir=settings.cache_dir,
                 **({"token": settings.hf_token} if settings.hf_token else {}),
             )
-            logger.info("  ✓ Transformer: NF4 quantized (~7 GB)")
+            logger.info("  Transformer: NF4 quantized (~7 GB)")
             self._pipe = WanPipeline.from_pretrained(model_id, transformer=transformer, **load_kwargs)
             for name, component in self._pipe.components.items():
                 if name != "transformer" and hasattr(component, "to"):
                     component.to(self.device)
-            logger.info("  ✓ All non-transformer components on GPU")
+            logger.info("  All non-transformer components on GPU")
         else:
+            # 1.3B model: full BF16, fits easily in 40GB. torch.compile applicable.
+            logger.info(f"  Loading {model_id} in BF16...")
             self._pipe = WanPipeline.from_pretrained(model_id, **load_kwargs)
             self._pipe.to(self.device)
 
@@ -229,6 +260,7 @@ class VideoPipeline:
         if settings.hf_token:
             load_kwargs["token"] = settings.hf_token
 
+        # NF4 double-quantization: same VRAM constraint as T2V 14B.
         logger.info(f"  Loading {model_id} transformer with NF4 double-quantization...")
         nf4 = self._make_nf4_config()
         try:
@@ -245,6 +277,7 @@ class VideoPipeline:
         for name, component in self._pipe.components.items():
             if name != "transformer" and hasattr(component, "to"):
                 component.to(self.device)
+        logger.info("  I2V NF4 quantized, all non-transformer components on GPU")
         self._apply_memory_opts()
 
     def _load_ltx_video(self, model_id: str, settings) -> None:
@@ -358,7 +391,7 @@ class VideoPipeline:
         # Emit 1% immediately so the UI shows activity even during model load/download
         if progress_callback:
             progress_callback(1.0)
-        self.load_model(model_name)
+        self.load_model(model_name, progress_callback)
         self._apply_lora(lora_name, lora_scale)
 
         height, width = RESOLUTION_MAP.get(resolution, (480, 848))
@@ -483,7 +516,7 @@ class VideoPipeline:
         # Emit 1% immediately so the UI shows activity even during model load/download
         if progress_callback:
             progress_callback(1.0)
-        self.load_model(model_name)
+        self.load_model(model_name, progress_callback)
         self._apply_lora(lora_name, lora_scale)
 
         generator = torch.Generator(device="cpu")
