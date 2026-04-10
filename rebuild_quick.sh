@@ -1,5 +1,5 @@
 #!/bin/bash
-# Quick rebuild (only copy gunicorn.conf and restart)
+# Full docker compose build and container restart (no --no-cache; uses layer cache)
 set -euo pipefail
 cd /opt/flux-server
 
@@ -25,7 +25,7 @@ for i in $(seq 1 24); do
   sleep 5
 done
 if [ -z "$H" ]; then
-  echo "ERROR: Server never became healthy after 120s. Aborting." >&2
+  echo "ERROR: Server never became healthy after 165s (45s startup + 120s polling). Aborting." >&2
   exit 1
 fi
 

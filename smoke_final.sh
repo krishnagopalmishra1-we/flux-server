@@ -76,18 +76,23 @@ if torch.cuda.is_available():
     for _ in range(20): torch.mm(a,b)
     torch.cuda.synchronize()
     tflops=2*4096**3*20/(time.perf_counter()-t0)/1e12
-    # Detect GPU and compute utilization against its theoretical BF16 peak
+    # Detect GPU and compare against verified BF16 (dense, no sparsity) TFLOPS peaks:
+    #   A100 SXM4: 312 BF16 TFLOPS  (NVIDIA datasheet)
+    #   H100 SXM:  1979 BF16 TFLOPS (NVIDIA datasheet, dense)
+    #   RTX 4090:  82.6 BF16 TFLOPS (NVIDIA datasheet)
+    #   RTX 3090:  71   BF16 TFLOPS (NVIDIA datasheet)
+    #   L4:        121  BF16 TFLOPS (NVIDIA datasheet)
     gpu_name = d.name.upper()
     if "A100" in gpu_name:
         peak = 312
     elif "H100" in gpu_name:
-        peak = 989
+        peak = 1979
     elif "RTX 4090" in gpu_name or "4090" in gpu_name:
-        peak = 165
+        peak = 82
     elif "RTX 3090" in gpu_name or "3090" in gpu_name:
-        peak = 142
+        peak = 71
     elif "L4" in gpu_name:
-        peak = 242
+        peak = 121
     else:
         peak = 0
     if peak > 0:

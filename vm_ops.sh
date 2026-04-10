@@ -5,14 +5,15 @@
 echo "=== ENVIRONMENT CHECK ==="
 which python3.11 2>/dev/null && python3.11 --version || echo "python3.11 not in PATH"
 which python3 2>/dev/null && python3 --version || echo "python3 not in PATH"
-find /opt/venv /usr/local/lib /home -maxdepth 4 -name "site-packages" -type d 2>/dev/null | head -5
+timeout 5 find /opt/venv /usr/local/lib /opt /home/*/.virtualenvs /home/*/venv -maxdepth 4 -name "site-packages" -type d 2>/dev/null | head -5
 
 echo "=== FIND PIP ==="
-find / -name "pip3*" -type f 2>/dev/null | grep -v proc | head -10
-find / -name "pip" -type f 2>/dev/null | grep -v proc | head -10
+find /usr/bin /usr/local/bin /opt /root -maxdepth 5 -name "pip3*" -type f 2>/dev/null | head -10
+find /usr/bin /usr/local/bin /opt /root -maxdepth 5 -name "pip" -type f 2>/dev/null | head -10
 
 echo "=== FIND GUNICORN ==="
-which gunicorn 2>/dev/null || find / -name gunicorn -type f 2>/dev/null | grep -v proc | head -5
+which gunicorn 2>/dev/null || \
+  find /usr/bin /usr/local/bin /opt /root -maxdepth 5 -name gunicorn -type f 2>/dev/null | head -5
 
 echo "=== CURRENT PACKAGES (torch/diffusers) ==="
 python3 -c "import torch; print('torch', torch.__version__)" 2>/dev/null || true

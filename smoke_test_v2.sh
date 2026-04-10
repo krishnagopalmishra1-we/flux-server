@@ -125,7 +125,7 @@ if [ -n "$RESP" ]; then
   else
     warn "FLUX 1-dev response: $STATUS (${ELAPSED}s) — $RESP"
   fi
-  echo "  Response: $(echo $RESP | head -c 300)"
+  echo "  Response: $(echo "$RESP" | head -c 300)"
 else
   warn "FLUX 1-dev: no response (model may not be loaded yet)"
 fi
@@ -154,7 +154,7 @@ else
       INF=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('inference_time_ms',0))" 2>/dev/null || echo 0)
       FRAMES=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('num_frames',0))" 2>/dev/null || echo 0)
       pass "WAN T2V 14B: COMPLETED in ${WALL}s (inference=${INF}ms, frames=$FRAMES)"
-      echo "  Full result: $(echo $JS | python3 -c 'import sys,json; d=json.load(sys.stdin); r=d.get("result",{}); print(r)' 2>/dev/null || echo $JS)"
+      echo "  Full result: $(echo "$JS" | python3 -c 'import sys,json; d=json.load(sys.stdin); r=d.get("result",{}); print(r)' 2>/dev/null || echo "$JS")"
       break
     elif [ "$STATUS" = "failed" ]; then
       ERR=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error_message',''))" 2>/dev/null || true)

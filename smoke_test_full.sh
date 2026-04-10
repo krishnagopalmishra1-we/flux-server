@@ -43,7 +43,7 @@ done
 [ -z "$STATUS" ] && fail "Server not responding after 60s"
 
 # Check queue stats
-log "Queue stats: $(curl -sf $BASE/api/queue 2>/dev/null)"
+log "Queue stats: $(curl -sf "$BASE/api/queue" 2>/dev/null)"
 
 # ── 3. Image generation — FLUX 1-dev max quality ──────────────────────────────
 log "=== PHASE 3: IMAGE — FLUX 1-dev (1024x1024, 28 steps, guidance=3.5) ==="
@@ -105,7 +105,7 @@ print(f"  video_url={r.get(\"video_url\",\"?\")}")
 ' 2>/dev/null || true
       break
     elif [[ "$STATUS" == "failed" ]]; then
-      log "WAN 14B T2V FAILED: $(echo $JOB_STATUS | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("error_message",""))' 2>/dev/null)"
+      log "WAN 14B T2V FAILED: $(echo "$JOB_STATUS" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("error_message",""))' 2>/dev/null)"
       break
     elif [[ $ELAPSED -gt 1200 ]]; then
       log "WAN 14B T2V TIMEOUT after 1200s"
@@ -193,7 +193,7 @@ nvidia-smi --query-gpu=name,memory.used,memory.free,utilization.gpu,temperature.
 # ── 8. Performance diagnostics ────────────────────────────────────────────────
 log "=== PHASE 8: PERFORMANCE DIAGNOSTICS ==="
 python3 - <<'PYEOF'
-import torch, subprocess, json
+import torch
 
 print("=== Attention backends ===")
 print(f"  flash_sdp:        {torch.backends.cuda.flash_sdp_enabled()}")

@@ -34,11 +34,21 @@ fi
 
 echo "=== [5/6] Verify new code is running ==="
 CNAME=$(sudo docker ps -q --filter name=flux-server 2>/dev/null | head -1)
-if [ -n "$CNAME" ]; then
-  sudo docker exec "$CNAME" head -5 /app/app/main.py
-else
-  echo "WARNING: No running flux-server container found" >&2
+if [ -z "$CNAME" ]; then
+  echo "ERROR: No running flux-server container found — deploy may have failed." >&2
+  exit 1
 fi
+# Verify the deployed code matches the local build by comparing the SHA-256 of main.py
+# inside the container against the local copy.
+EXPECTED=$(sha256sum /opt/flux-server/app/main.py | awk '{print $1}')
+ACTUAL=$(sudo docker exec "$CNAME" sh -c "sha256sum /app/app/main.py" | awk '{print $1}')
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "ERROR: /app/app/main.py checksum mismatch — container may be running stale code." >&2
+  echo "  expected: $EXPECTED" >&2
+  echo "  actual:   $ACTUAL" >&2
+  exit 1
+fi
+echo "Code verification passed (main.py SHA-256: $ACTUAL)"
 
 echo "=== [6/6] Container logs (last 40 lines) ==="
 sudo docker compose logs --tail=40

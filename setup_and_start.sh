@@ -9,7 +9,7 @@ which python3
 
 echo "=== [2/5] Install/upgrade dependencies ==="
 pip3 install -q --upgrade pip
-pip3 install -q -r requirements.txt 2>&1 | tail -20
+pip3 install -q -r requirements.txt 2>&1 | tee pip-install.log | tail -20
 
 echo "=== [3/5] Verify video_loras directory ==="
 mkdir -p /opt/flux-server/video_loras
