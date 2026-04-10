@@ -3,7 +3,14 @@
 # Run on VM host. Results at /tmp/smoke_final.txt
 set -uo pipefail
 BASE="http://localhost:8080"
-API_KEY="NEWDEVIM-Flux-1990-madheal-2020xy"
+# Dev-only API key — must NOT grant production access.
+# Set SMOKE_API_KEY in the environment before running this script.
+# Example: export SMOKE_API_KEY="your-dev-key" && bash /tmp/smoke_final.sh
+API_KEY="${SMOKE_API_KEY:-}"
+if [ -z "$API_KEY" ]; then
+  echo "ERROR: SMOKE_API_KEY environment variable is not set. Aborting." >&2
+  exit 1
+fi
 PASS=0; FAIL=0; WARN=0
 
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -46,7 +53,7 @@ H=$(curl -sf "$BASE/health" 2>/dev/null || true)
 # ── PHASE 2: Python/CUDA diagnostics inside container ─────────────────────────
 log "=== PHASE 2: PYTHON/CUDA DIAGNOSTICS ==="
 CONTAINER=$(sudo docker ps -q --filter name=flux-server 2>/dev/null | head -1)
-[ -n "$CONTAINER" ] && sudo docker exec "$CONTAINER" python3.11 - <<'PYEOF' || warn "Container exec failed"
+if [ -n "$CONTAINER" ] && sudo docker exec "$CONTAINER" python3.11 - <<'PYEOF'
 import torch
 print(f"PyTorch:         {torch.__version__}")
 print(f"CUDA:            {torch.cuda.is_available()}")
@@ -69,10 +76,31 @@ if torch.cuda.is_available():
     for _ in range(20): torch.mm(a,b)
     torch.cuda.synchronize()
     tflops=2*4096**3*20/(time.perf_counter()-t0)/1e12
-    print(f"BF16 TFLOPS:     {tflops:.0f}  ({tflops/312*100:.0f}% of A100 peak 312)")
+    # Detect GPU and compute utilization against its theoretical BF16 peak
+    gpu_name = d.name.upper()
+    if "A100" in gpu_name:
+        peak = 312
+    elif "H100" in gpu_name:
+        peak = 989
+    elif "RTX 4090" in gpu_name or "4090" in gpu_name:
+        peak = 165
+    elif "RTX 3090" in gpu_name or "3090" in gpu_name:
+        peak = 142
+    elif "L4" in gpu_name:
+        peak = 242
+    else:
+        peak = 0
+    if peak > 0:
+        print(f"BF16 TFLOPS:     {tflops:.0f}  ({tflops/peak*100:.0f}% of {d.name} peak {peak})")
+    else:
+        print(f"BF16 TFLOPS:     {tflops:.0f}  (GPU peak unknown for {d.name})")
     del a,b; torch.cuda.empty_cache()
 PYEOF
-pass "Container diagnostics done"
+then
+  pass "Container diagnostics done"
+else
+  warn "Container exec failed"
+fi
 
 # ── PHASE 3: FLUX 1-dev — 1024×1024, 28 steps ────────────────────────────────
 log "=== PHASE 3: IMAGE — FLUX 1-dev (1024×1024, 28 steps) ==="
