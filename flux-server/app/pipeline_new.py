@@ -116,7 +116,7 @@ class InferencePipeline:
 
             # Warmup pass — triggers kernel compilation and cache warm
             logger.info("Running warmup inference pass...")
-            with torch.no_grad():
+            with torch.inference_mode():
                 pipe(
                     prompt="warmup",
                     width=256,
@@ -390,7 +390,7 @@ class InferencePipeline:
         if effective_negative_prompt and model_cfg.pipeline_class != FluxPipeline:
             gen_kwargs["negative_prompt"] = effective_negative_prompt
 
-        with torch.no_grad():
+        with torch.inference_mode():
             if use_refiner and model_name in {"realvisxl-v5", "juggernaut-xl"}:
                 # Two-stage SDXL: base produces latents, refiner polishes details.
                 high_noise_frac = 0.8

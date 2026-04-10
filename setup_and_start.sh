@@ -27,11 +27,15 @@ if [ ! -f /opt/flux-server/.env ]; then
   cat > /opt/flux-server/.env <<'ENV'
 HF_TOKEN=
 CACHE_DIR=/mnt/hf-cache
+CACHE_DIR_SSD=/app/model_cache
 OUTPUT_DIR=/mnt/outputs
 ENABLE_VIDEO=true
 ENABLE_MUSIC=true
 ENABLE_ANIMATION=true
 WAN_DEFAULT_VARIANT=14b
+# Set HF_OFFLINE=true after first successful model download to skip HF network checks.
+HF_OFFLINE=false
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV
 fi
 

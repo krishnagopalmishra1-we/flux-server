@@ -79,6 +79,20 @@ async def _handle_video_job(job) -> dict:
             job_id=job.id,
             progress_callback=_progress,
         )
+    elif job.model_name == "hunyuan-video":
+        fn = functools.partial(
+            _run_sync,
+            video_pipeline.generate_hunyuan_video,
+            prompt=payload["prompt"],
+            resolution=payload.get("resolution", "720p"),
+            num_frames=payload.get("num_frames", 129),
+            fps=payload.get("fps", 24),
+            guidance_scale=payload.get("guidance_scale", 6.0),
+            num_inference_steps=payload.get("num_inference_steps", 50),
+            seed=payload.get("seed"),
+            job_id=job.id,
+            progress_callback=_progress,
+        )
     else:
         fn = functools.partial(
             _run_sync,

@@ -5,12 +5,18 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      # HDD — all video/music/animation models (WAN 14B=118G, I2V 14B=118G etc.)
       - /mnt/hf-cache-disk:/mnt/hf-cache
+      # SSD — FLUX.1-dev only (32G). Stored in a Docker named volume on the boot disk.
+      # Add more models here only if their on-disk checkpoint fits the ~128G SSD budget.
+      - model_cache_ssd:/app/model_cache
       - outputs:/mnt/outputs
       - ./loras:/app/loras
       - ./models:/app/models
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      # Set HF_OFFLINE=true in .env after first successful model download
+      # to eliminate HF network metadata round-trips on every load.
     env_file:
       - .env
     shm_size: '2g'
@@ -25,3 +31,5 @@ services:
 
 volumes:
   outputs:
+  # SSD-resident model cache — survives container rebuilds, stored on boot disk.
+  model_cache_ssd:

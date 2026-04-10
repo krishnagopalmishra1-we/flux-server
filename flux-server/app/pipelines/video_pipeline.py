@@ -50,6 +50,7 @@ if torch.cuda.is_available():
 RESOLUTION_MAP = {
     "480p":  (480, 848),
     "720p":  (720, 1280),
+    "540p":  (544, 960),   # HunyuanVideo native 9:16
 }
 
 VIDEO_LORA_DIR = Path("video_loras")
@@ -103,16 +104,10 @@ class VideoPipeline:
             p.enable_vae_slicing()
         if hasattr(p, "enable_vae_tiling"):
             p.enable_vae_tiling()
-        if hasattr(p, "enable_attention_slicing"):
-            p.enable_attention_slicing(1)
-        # Attempt xFormers only when PyTorch 2.x FlashAttention-2 SDP is not active.
-        if not torch.backends.cuda.flash_sdp_enabled():
-            if hasattr(p, "enable_xformers_memory_efficient_attention"):
-                try:
-                    p.enable_xformers_memory_efficient_attention()
-                    logger.info("  ✓ xFormers fallback attention enabled")
-                except Exception:
-                    pass
+        # Do NOT call enable_attention_slicing — it disables FlashSDP batching.
+        # PyTorch 2.x scaled_dot_product_attention handles memory efficiently on A100.
+        if hasattr(p, "set_progress_bar_config"):
+            p.set_progress_bar_config(disable=True)
 
     def _try_compile_transformer(self) -> None:
         """Apply torch.compile to the transformer on non-quantized pipelines.
@@ -178,7 +173,7 @@ class VideoPipeline:
             while not stop_event.wait(30.0):
                 if progress_callback:
                     progress_callback(2.0)
-                    
+
         keepalive_thread = threading.Thread(target=keepalive)
         keepalive_thread.daemon = True
         keepalive_thread.start()
@@ -186,18 +181,32 @@ class VideoPipeline:
         try:
             self.unload()
             settings = get_settings()
-            logger.info(f"Loading video model: {model_name}")
+
+            # Apply offline mode to skip HF network metadata round-trips.
+            if settings.hf_offline:
+                import os as _os
+                _os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+            # SSD-tier: only models whose on-disk checkpoint fits the 128GB SSD.
+            # WAN 14B = 118GB on disk → HDD. HunyuanVideo TBD → HDD until measured.
+            # FLUX is handled by model_manager; video models all use HDD for now.
+            cache_dir = settings.cache_dir
+
+            logger.info(f"Loading video model: {model_name} (cache={cache_dir})")
             try:
                 if model_name == "wan-t2v-1.3b":
-                    self._load_wan_t2v("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", quantize=False, settings=settings)
+                    self._load_wan_t2v("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", quantize=False, settings=settings, cache_dir=cache_dir)
                 elif model_name == "wan-t2v-14b":
                     # NF4 double-quantization: transformer ~7-8 GB vs ~28 GB BF16.
                     # Required on A100 40GB — BF16 14B OOMs at 49 frames (38.76 GB).
-                    self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=True, settings=settings)
+                    self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=True, settings=settings, cache_dir=cache_dir)
                 elif model_name == "wan-i2v-14b":
-                    self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", settings=settings)
+                    self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", settings=settings, cache_dir=cache_dir)
                 elif model_name == "ltx-video":
-                    self._load_ltx_video("Lightricks/LTX-Video", settings=settings)
+                    self._load_ltx_video("Lightricks/LTX-Video", settings=settings, cache_dir=cache_dir)
+                elif model_name == "hunyuan-video":
+                    self._load_hunyuan_video(settings=settings, cache_dir=cache_dir)
                 else:
                     raise ValueError(f"Unknown video model: {model_name}")
                 self._current_model = model_name
@@ -211,12 +220,12 @@ class VideoPipeline:
             stop_event.set()
             keepalive_thread.join(timeout=1.0)
 
-    def _load_wan_t2v(self, model_id: str, quantize: bool, settings) -> None:
+    def _load_wan_t2v(self, model_id: str, quantize: bool, settings, cache_dir: str) -> None:
         WanPipeline = self._resolve_pipeline_class(
             "WanPipeline",
             ["diffusers.pipelines.wan.pipeline_wan", "diffusers.pipelines.wan"],
         )
-        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": settings.cache_dir}
+        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": cache_dir}
         if settings.hf_token:
             load_kwargs["token"] = settings.hf_token
 
@@ -232,7 +241,7 @@ class VideoPipeline:
             transformer = WanTransformer3DModel.from_pretrained(
                 model_id, subfolder="transformer",
                 quantization_config=nf4, torch_dtype=torch.bfloat16,
-                cache_dir=settings.cache_dir,
+                cache_dir=cache_dir,
                 **({"token": settings.hf_token} if settings.hf_token else {}),
             )
             logger.info("  Transformer: NF4 quantized (~7 GB)")
@@ -251,12 +260,12 @@ class VideoPipeline:
         if not quantize:
             self._try_compile_transformer()
 
-    def _load_wan_i2v(self, model_id: str, settings) -> None:
+    def _load_wan_i2v(self, model_id: str, settings, cache_dir: str) -> None:
         WanI2V = self._resolve_pipeline_class(
             "WanImageToVideoPipeline",
             ["diffusers.pipelines.wan.pipeline_wan_i2v", "diffusers.pipelines.wan"],
         )
-        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": settings.cache_dir}
+        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": cache_dir}
         if settings.hf_token:
             load_kwargs["token"] = settings.hf_token
 
@@ -270,7 +279,7 @@ class VideoPipeline:
         transformer = WanTransformer3DModel.from_pretrained(
             model_id, subfolder="transformer",
             quantization_config=nf4, torch_dtype=torch.bfloat16,
-            cache_dir=settings.cache_dir,
+            cache_dir=cache_dir,
             **({"token": settings.hf_token} if settings.hf_token else {}),
         )
         self._pipe = WanI2V.from_pretrained(model_id, transformer=transformer, **load_kwargs)
@@ -280,18 +289,63 @@ class VideoPipeline:
         logger.info("  I2V NF4 quantized, all non-transformer components on GPU")
         self._apply_memory_opts()
 
-    def _load_ltx_video(self, model_id: str, settings) -> None:
+    def _load_ltx_video(self, model_id: str, settings, cache_dir: str) -> None:
         LTXPipeline = self._resolve_pipeline_class(
             "LTXPipeline",
             ["diffusers.pipelines.ltx.pipeline_ltx", "diffusers.pipelines.ltx"],
         )
-        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": settings.cache_dir}
+        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": cache_dir}
         if settings.hf_token:
             load_kwargs["token"] = settings.hf_token
         self._pipe = LTXPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipe.to(self.device)
         self._apply_memory_opts()
         self._try_compile_transformer()
+
+    def _load_hunyuan_video(self, settings, cache_dir: str) -> None:
+        """Load HunyuanVideo with NF4-quantized transformer (fits A100 40GB).
+
+        Transformer: ~8 GB NF4 | VAE + text encoders: ~4 GB BF16 | Total: ~12 GB
+        Allows 720p 129-frame generation (~36 GB peak including activations).
+        """
+        model_id = "hunyuanvideo-community/HunyuanVideo"
+        HunyuanVideoPipeline = self._resolve_pipeline_class(
+            "HunyuanVideoPipeline",
+            ["diffusers.pipelines.hunyuan_video", "diffusers"],
+        )
+        try:
+            from diffusers import HunyuanVideoTransformer3DModel
+        except ImportError:
+            try:
+                from diffusers.models import HunyuanVideoTransformer3DModel
+            except ImportError:
+                raise ImportError(
+                    "HunyuanVideoTransformer3DModel not found. "
+                    "Upgrade diffusers: pip install diffusers>=0.32"
+                )
+
+        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": cache_dir}
+        if settings.hf_token:
+            load_kwargs["token"] = settings.hf_token
+
+        logger.info("  Loading HunyuanVideo transformer with NF4 double-quantization...")
+        nf4 = self._make_nf4_config()
+        transformer = HunyuanVideoTransformer3DModel.from_pretrained(
+            model_id, subfolder="transformer",
+            quantization_config=nf4, torch_dtype=torch.bfloat16,
+            cache_dir=cache_dir,
+            **({"token": settings.hf_token} if settings.hf_token else {}),
+        )
+        logger.info("  Transformer: NF4 quantized (~8 GB)")
+        self._pipe = HunyuanVideoPipeline.from_pretrained(
+            model_id, transformer=transformer, **load_kwargs
+        )
+        for name, component in self._pipe.components.items():
+            if name != "transformer" and hasattr(component, "to"):
+                component.to(self.device)
+        logger.info("  All non-transformer components on GPU")
+        self._apply_memory_opts()
+        logger.info("✅ HunyuanVideo loaded")
 
     # ──────────────────────────────────────────────
     #  LoRA Support
@@ -398,7 +452,7 @@ class VideoPipeline:
         height = (height // 32) * 32
         width  = (width  // 32) * 32
 
-        generator = torch.Generator(device="cpu")
+        generator = torch.Generator(device=self.device)
         if seed is not None:
             generator.manual_seed(seed)
         else:
@@ -414,15 +468,9 @@ class VideoPipeline:
         # Build diffusers step callback that feeds into job progress
         _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
 
-        # For long videos (>49 frames), offload the VAE decoder to CPU to free ~2GB VRAM
-        # during denoising — decode happens at the end so latency cost is minimal.
-        if num_frames > 49 and hasattr(self._pipe, "vae") and hasattr(self._pipe.vae, "to"):
-            self._pipe.vae.to("cpu")
-            logger.info(f"T2V: VAE offloaded to CPU for {num_frames}-frame video")
-
         start = time.perf_counter()
         try:
-            with torch.no_grad():
+            with torch.inference_mode():
                 output = self._pipe(
                     prompt=prompt,
                     negative_prompt=negative_prompt or None,
@@ -440,7 +488,7 @@ class VideoPipeline:
             if hasattr(self._pipe, "enable_sequential_cpu_offload"):
                 self._pipe.enable_sequential_cpu_offload()
             try:
-                with torch.no_grad():
+                with torch.inference_mode():
                     output = self._pipe(
                         prompt=prompt,
                         negative_prompt=negative_prompt or None,
@@ -452,8 +500,6 @@ class VideoPipeline:
                         callback_on_step_end=_step_cb,
                     )
             except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
-                # Retry also failed — CUDA context may be poisoned. Unload to reset state
-                # so the next job starts clean (avoids "device-side assert triggered" cascade).
                 logger.error(f"T2V OOM retry also failed: {retry_err}. Unloading pipeline to reset CUDA state.")
                 self.unload()
                 torch.cuda.empty_cache()
@@ -519,7 +565,7 @@ class VideoPipeline:
         self.load_model(model_name, progress_callback)
         self._apply_lora(lora_name, lora_scale)
 
-        generator = torch.Generator(device="cpu")
+        generator = torch.Generator(device=self.device)
         if seed is not None:
             generator.manual_seed(seed)
         else:
@@ -531,15 +577,10 @@ class VideoPipeline:
 
         logger.info(f"I2V: {num_frames} frames, model={model_name}, steps={num_inference_steps}")
 
-        # For long videos (>49 frames), offload the VAE decoder to CPU to free ~2GB VRAM
-        if num_frames > 49 and hasattr(self._pipe, "vae") and hasattr(self._pipe.vae, "to"):
-            self._pipe.vae.to("cpu")
-            logger.info(f"I2V: VAE offloaded to CPU for {num_frames}-frame video")
-
         start = time.perf_counter()
 
         try:
-            with torch.no_grad():
+            with torch.inference_mode():
                 output = self._pipe(
                     image=source_image,
                     prompt=prompt or "",
@@ -556,7 +597,7 @@ class VideoPipeline:
             if hasattr(self._pipe, "enable_sequential_cpu_offload"):
                 self._pipe.enable_sequential_cpu_offload()
             try:
-                with torch.no_grad():
+                with torch.inference_mode():
                     output = self._pipe(
                         image=source_image,
                         prompt=prompt or "",
@@ -588,6 +629,109 @@ class VideoPipeline:
 
         num_frames_out = len(frames)
         duration_seconds = num_frames_out / fps
+        if progress_callback:
+            progress_callback(100.0)
+
+        return {
+            "video_url": output_store.get_url(video_path),
+            "thumbnail_b64": thumbnail_b64,
+            "duration_seconds": round(duration_seconds, 2),
+            "inference_time_ms": round(elapsed_ms, 0),
+            "seed_used": seed,
+            "num_frames": num_frames_out,
+        }
+
+    # ──────────────────────────────────────────────
+    #  Inference — HunyuanVideo
+    # ──────────────────────────────────────────────
+
+    async def generate_hunyuan_video(
+        self,
+        prompt: str,
+        resolution: str = "720p",
+        num_frames: int = 129,
+        fps: int = 24,
+        guidance_scale: float = 6.0,
+        num_inference_steps: int = 50,
+        seed: Optional[int] = None,
+        job_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[float], None]] = None,
+    ) -> Dict[str, Any]:
+        if progress_callback:
+            progress_callback(1.0)
+        self.load_model("hunyuan-video", progress_callback)
+
+        # HunyuanVideo uses (height, width) — native 9:16 at 720p is 720×1280
+        height, width = RESOLUTION_MAP.get(resolution, (720, 1280))
+        height = (height // 32) * 32
+        width  = (width  // 32) * 32
+
+        generator = torch.Generator(device=self.device)
+        if seed is not None:
+            generator.manual_seed(seed)
+        else:
+            seed = generator.seed()
+
+        if progress_callback:
+            progress_callback(5.0)
+        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
+
+        logger.info(
+            f"HunyuanVideo: {width}x{height}, {num_frames} frames, steps={num_inference_steps}"
+        )
+
+        start = time.perf_counter()
+        try:
+            with torch.inference_mode():
+                output = self._pipe(
+                    prompt=prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                    generator=generator,
+                    callback_on_step_end=_step_cb,
+                )
+        except torch.cuda.OutOfMemoryError:
+            logger.warning("OOM during HunyuanVideo — enabling sequential CPU offload and retrying...")
+            torch.cuda.empty_cache()
+            gc.collect()
+            if hasattr(self._pipe, "enable_sequential_cpu_offload"):
+                self._pipe.enable_sequential_cpu_offload()
+            try:
+                with torch.inference_mode():
+                    output = self._pipe(
+                        prompt=prompt,
+                        height=height,
+                        width=width,
+                        num_frames=num_frames,
+                        guidance_scale=guidance_scale,
+                        num_inference_steps=num_inference_steps,
+                        generator=generator,
+                        callback_on_step_end=_step_cb,
+                    )
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
+                logger.error(f"HunyuanVideo OOM retry failed: {retry_err}. Resetting CUDA state.")
+                self.unload()
+                torch.cuda.empty_cache()
+                gc.collect()
+                raise
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if progress_callback:
+            progress_callback(92.0)
+
+        raw_frames = output.frames[0]
+        frames = list(raw_frames) if hasattr(raw_frames, "__iter__") else []
+
+        video_path = self._save_video(frames, fps, job_id)
+        thumbnail_b64 = self._frame_to_b64(frames[0] if frames else None)
+        torch.cuda.empty_cache()
+
+        num_frames_out = len(frames)
+        duration_seconds = num_frames_out / fps
+        logger.info(f"HunyuanVideo complete: {num_frames_out} frames, {elapsed_ms:.0f}ms")
         if progress_callback:
             progress_callback(100.0)
 

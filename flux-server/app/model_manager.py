@@ -223,6 +223,21 @@ class MultiModelManager:
             default_steps=30,
             default_guidance_scale=3.0,
         ),
+        "hunyuan-video": ModelConfig(
+            model_id="hunyuanvideo-community/HunyuanVideo",
+            pipeline_class=None,
+            category=ModelCategory.VIDEO,
+            output_type=OutputType.VIDEO_FILE,
+            pipeline_module="app.pipelines.video_pipeline",
+            quantize=True,
+            quantize_type="nf4",
+            vram_free_gb=36.0,
+            description="HunyuanVideo: SOTA 720p text-to-video, NF4 quantized transformer",
+            min_steps=20,
+            max_steps=100,
+            default_steps=50,
+            default_guidance_scale=6.0,
+        ),
 
         # ═══════════════════════════════════════════════
         #  MUSIC MODELS (Song + Instrumental + SFX)
@@ -388,23 +403,39 @@ class MultiModelManager:
         Unloads all other models first to maximize free VRAM.
         """
         settings = get_settings()
-        
+
+        # Apply offline mode — eliminates HF network metadata round-trips on every load.
+        if settings.hf_offline:
+            import os as _os
+            _os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
         if model_name in self.pipelines:
             logger.info(f"Model {model_name} already loaded, skipping load")
             self.current_model = model_name
             return
-        
+
         config = self.get_model_config(model_name)
-        
+
         # Unload ALL other models to maximize free VRAM
         for old_model in list(self.pipelines.keys()):
             if old_model != model_name:
                 self._unload_model(old_model)
-        
+
         gpu_info = self.gpu_info()
         logger.info(f"Loading {model_name} (needs ~{config.vram_free_gb}GB)...")
         logger.info(f"GPU: {gpu_info['name']} | Free: {gpu_info['free_gb']:.1f}GB / {gpu_info['total_gb']:.1f}GB")
-        
+
+        # SSD-tier: models whose checkpoint fits on the 128GB SSD boot disk.
+        # FLUX.1-dev = 32GB on disk → SSD. WAN 14B = 118GB on disk → HDD (too large).
+        # HunyuanVideo checkpoint TBD — defaults to HDD until first download.
+        SSD_PRIORITY = {"flux-1-dev"}
+        cache_dir = (
+            settings.cache_dir_ssd
+            if model_name in SSD_PRIORITY
+            else settings.cache_dir
+        )
+
         try:
             # Pick the right HF token for this model
             token = settings.hf_token
@@ -413,7 +444,7 @@ class MultiModelManager:
 
             load_kwargs = {
                 "torch_dtype": torch.bfloat16,
-                "cache_dir": settings.cache_dir,
+                "cache_dir": cache_dir,
             }
             if token:
                 load_kwargs["token"] = token
@@ -450,7 +481,7 @@ class MultiModelManager:
                     subfolder="transformer",
                     quantization_config=nf4_config,
                     torch_dtype=torch.bfloat16,
-                    cache_dir=settings.cache_dir,
+                    cache_dir=cache_dir,
                     token=token if token else None,
                 )
                 load_kwargs["transformer"] = transformer
@@ -469,7 +500,7 @@ class MultiModelManager:
                     subfolder="transformer",
                     quantization_config=nf4_config,
                     torch_dtype=torch.bfloat16,
-                    cache_dir=settings.cache_dir,
+                    cache_dir=cache_dir,
                     token=token if token else None,
                 )
                 load_kwargs["transformer"] = transformer
@@ -488,13 +519,15 @@ class MultiModelManager:
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.allow_tf32 = True
 
-            # Enable memory optimizations
-            if hasattr(pipe, 'enable_attention_slicing'):
-                pipe.enable_attention_slicing(1)
+            # Enable memory optimizations for image models
+            # Note: attention_slicing is intentionally omitted — FlashSDP on A100 handles
+            # memory management natively and attention_slicing disables its batching.
             if hasattr(pipe, 'enable_vae_slicing'):
                 pipe.enable_vae_slicing()
             if hasattr(pipe, 'enable_vae_tiling'):
                 pipe.enable_vae_tiling()
+            if hasattr(pipe, 'set_progress_bar_config'):
+                pipe.set_progress_bar_config(disable=True)
 
             # Store and track
             self.pipelines[model_name] = pipe

@@ -5,9 +5,20 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # Model
     model_id: str = "black-forest-labs/FLUX.1-dev"
-    cache_dir: str = "/mnt/hf-cache"
+
+    # Cache directories — split by disk tier for speed.
+    # High-priority models (FLUX, WAN 14B, HunyuanVideo) go on SSD (/app/model_cache).
+    # Low-priority models (WAN 1.3B, I2V 14B, LTX) fall back to HDD (/mnt/hf-cache).
+    # Set cache_dir_ssd=/mnt/hf-cache to disable split caching (single disk).
+    cache_dir: str = "/mnt/hf-cache"        # default / HDD fallback
+    cache_dir_ssd: str = "/app/model_cache" # SSD — fast-path for priority models
+
     hf_token: str = ""
     sd3_hf_token: str = ""  # Separate token for SD3 gated models
+
+    # Offline mode — set after first cache fill to skip HF network metadata checks.
+    # Eliminates ~2-30s of network overhead per model load.
+    hf_offline: bool = False
 
     # Server
     host: str = "0.0.0.0"
