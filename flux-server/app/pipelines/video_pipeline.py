@@ -188,10 +188,16 @@ class VideoPipeline:
                 _os.environ.setdefault("HF_HUB_OFFLINE", "1")
                 _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-            # SSD-tier: only models whose on-disk checkpoint fits the 128GB SSD.
-            # WAN 14B = 118GB on disk → HDD. HunyuanVideo TBD → HDD until measured.
-            # FLUX is handled by model_manager; video models all use HDD for now.
-            cache_dir = settings.cache_dir
+            # SSD-tier: 250GB SSD, 128GB free. Video models that fit:
+            #   WAN 1.3B = 27GB → SSD. WAN 14B = 118GB → HDD (too large).
+            #   HunyuanVideo NF4 ~20GB → SSD (handled via model_manager for image path,
+            #   but video_pipeline loads it directly here).
+            SSD_PRIORITY = {"wan-t2v-1.3b", "hunyuan-video"}
+            cache_dir = (
+                settings.cache_dir_ssd
+                if model_name in SSD_PRIORITY
+                else settings.cache_dir
+            )
 
             logger.info(f"Loading video model: {model_name} (cache={cache_dir})")
             try:

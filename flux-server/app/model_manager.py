@@ -426,10 +426,10 @@ class MultiModelManager:
         logger.info(f"Loading {model_name} (needs ~{config.vram_free_gb}GB)...")
         logger.info(f"GPU: {gpu_info['name']} | Free: {gpu_info['free_gb']:.1f}GB / {gpu_info['total_gb']:.1f}GB")
 
-        # SSD-tier: models whose checkpoint fits on the 128GB SSD boot disk.
-        # FLUX.1-dev = 32GB, HunyuanVideo NF4 = ~20GB → both fit (52GB total, 128GB free).
-        # WAN 14B = 118GB on disk → HDD (too large for SSD).
-        SSD_PRIORITY = {"flux-1-dev", "hunyuan-video"}
+        # SSD-tier: 250GB SSD, 128GB free. Models that fit:
+        #   FLUX.1-dev = 32GB, HunyuanVideo NF4 = ~20GB, WAN 1.3B = 27GB → ~79GB total.
+        # WAN 14B = 118GB on disk → HDD (too large).
+        SSD_PRIORITY = {"flux-1-dev", "hunyuan-video", "wan-t2v-1.3b"}
         cache_dir = (
             settings.cache_dir_ssd
             if model_name in SSD_PRIORITY
