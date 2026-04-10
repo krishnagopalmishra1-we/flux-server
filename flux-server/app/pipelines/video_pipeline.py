@@ -406,17 +406,26 @@ class VideoPipeline:
             gc.collect()
             if hasattr(self._pipe, "enable_sequential_cpu_offload"):
                 self._pipe.enable_sequential_cpu_offload()
-            with torch.no_grad():
-                output = self._pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt or None,
-                    height=height, width=width,
-                    num_frames=num_frames,
-                    guidance_scale=guidance_scale,
-                    num_inference_steps=num_inference_steps,
-                    generator=generator,
-                    callback_on_step_end=_step_cb,
-                )
+            try:
+                with torch.no_grad():
+                    output = self._pipe(
+                        prompt=prompt,
+                        negative_prompt=negative_prompt or None,
+                        height=height, width=width,
+                        num_frames=num_frames,
+                        guidance_scale=guidance_scale,
+                        num_inference_steps=num_inference_steps,
+                        generator=generator,
+                        callback_on_step_end=_step_cb,
+                    )
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
+                # Retry also failed — CUDA context may be poisoned. Unload to reset state
+                # so the next job starts clean (avoids "device-side assert triggered" cascade).
+                logger.error(f"T2V OOM retry also failed: {retry_err}. Unloading pipeline to reset CUDA state.")
+                self.unload()
+                torch.cuda.empty_cache()
+                gc.collect()
+                raise
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         if progress_callback:
@@ -513,16 +522,23 @@ class VideoPipeline:
             gc.collect()
             if hasattr(self._pipe, "enable_sequential_cpu_offload"):
                 self._pipe.enable_sequential_cpu_offload()
-            with torch.no_grad():
-                output = self._pipe(
-                    image=source_image,
-                    prompt=prompt or "",
-                    num_frames=num_frames,
-                    guidance_scale=guidance_scale,
-                    num_inference_steps=num_inference_steps,
-                    generator=generator,
-                    callback_on_step_end=_step_cb,
-                )
+            try:
+                with torch.no_grad():
+                    output = self._pipe(
+                        image=source_image,
+                        prompt=prompt or "",
+                        num_frames=num_frames,
+                        guidance_scale=guidance_scale,
+                        num_inference_steps=num_inference_steps,
+                        generator=generator,
+                        callback_on_step_end=_step_cb,
+                    )
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
+                logger.error(f"I2V OOM retry also failed: {retry_err}. Unloading pipeline to reset CUDA state.")
+                self.unload()
+                torch.cuda.empty_cache()
+                gc.collect()
+                raise
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         if progress_callback:
