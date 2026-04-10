@@ -124,17 +124,11 @@ _gpu_lock = asyncio.Lock()
 
 
 async def _preload_video_model_background():
-    """Background task to pre-load Wan 2.2 default model while server handles requests."""
-    settings = get_settings()
-    variant = settings.wan_default_variant  # "14b" in production
-    model_name = f"wan-t2v-{variant}"
-    logger.info(f"Video pre-load: warming up {model_name}...")
-    try:
-        async with _gpu_lock:
-            await asyncio.to_thread(video_pipeline.load_model, model_name)
-        logger.info(f"Video pre-load: {model_name} ready")
-    except Exception as e:
-        logger.warning(f"Video pre-load failed (non-fatal, model will load on first request): {e}")
+    """Background pre-load — DISABLED: holds _gpu_lock for 15-20min on cold start, blocking
+    incoming jobs at 0% progress for the entire model download/load duration. Models load
+    on first request instead; the 1800s watchdog timeout accommodates first-run load time."""
+    logger.info("Video pre-load: disabled (first request will trigger model load)")
+    return
 
 
 @asynccontextmanager

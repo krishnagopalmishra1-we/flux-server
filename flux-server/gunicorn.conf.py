@@ -7,5 +7,6 @@ accesslog = "-"       # Log to stdout (captured by Docker/Cloud Logging)
 errorlog = "-"
 loglevel = "info"
 # preload_app = True  # DISABLED: CUDA cannot be re-initialized after fork (workers=1, no benefit anyway)
-max_requests = 100    # Recycle worker after N requests to prevent memory fragmentation
-max_requests_jitter = 20  # ±20 jitter so all workers don't recycle simultaneously
+# max_requests / max_requests_jitter DISABLED: recycling workers mid-job kills in-flight video
+# generation (job state is in-memory). With workers=1 and GPU jobs lasting 5-30min, worker
+# recycling would terminate running jobs. Memory fragmentation is acceptable given single-worker setup.
