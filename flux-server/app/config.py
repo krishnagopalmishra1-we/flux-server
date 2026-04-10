@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     enable_animation: bool = True
 
     # Video defaults
-    wan_default_variant: str = "1.3b"  # "1.3b" or "14b"
+    wan_default_variant: str = "14b"   # "1.3b" or "14b"
     default_video_fps: int = 16
     default_video_frames: int = 33
 

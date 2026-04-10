@@ -378,6 +378,12 @@ class VideoPipeline:
         # Build diffusers step callback that feeds into job progress
         _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
 
+        # For long videos (>49 frames), offload the VAE decoder to CPU to free ~2GB VRAM
+        # during denoising — decode happens at the end so latency cost is minimal.
+        if num_frames > 49 and hasattr(self._pipe, "vae") and hasattr(self._pipe.vae, "to"):
+            self._pipe.vae.to("cpu")
+            logger.info(f"T2V: VAE offloaded to CPU for {num_frames}-frame video")
+
         start = time.perf_counter()
         try:
             with torch.no_grad():
@@ -476,6 +482,12 @@ class VideoPipeline:
         _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
 
         logger.info(f"I2V: {num_frames} frames, model={model_name}, steps={num_inference_steps}")
+
+        # For long videos (>49 frames), offload the VAE decoder to CPU to free ~2GB VRAM
+        if num_frames > 49 and hasattr(self._pipe, "vae") and hasattr(self._pipe.vae, "to"):
+            self._pipe.vae.to("cpu")
+            logger.info(f"I2V: VAE offloaded to CPU for {num_frames}-frame video")
+
         start = time.perf_counter()
 
         try:

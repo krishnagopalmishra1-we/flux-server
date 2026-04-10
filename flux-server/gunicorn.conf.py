@@ -6,3 +6,6 @@ keepalive = 5
 accesslog = "-"       # Log to stdout (captured by Docker/Cloud Logging)
 errorlog = "-"
 loglevel = "info"
+preload_app = True    # Load app once before forking — prevents model reload on worker recycle
+max_requests = 100    # Recycle worker after N requests to prevent memory fragmentation
+max_requests_jitter = 20  # ±20 jitter so all workers don't recycle simultaneously
