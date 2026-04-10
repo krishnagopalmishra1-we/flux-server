@@ -21,6 +21,15 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Set global CUDA performance flags at import time so they are active for every
+# model loaded in this process, including the first one.
+if torch.cuda.is_available():
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    logger.info("Global CUDA flags: FlashSDP=True, TF32=True")
+
 
 class ModelCategory(str, Enum):
     """Categories of AI generation models."""

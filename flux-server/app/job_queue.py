@@ -326,7 +326,7 @@ class JobQueue:
         while True:
             await asyncio.sleep(60.0)
             now = time.time()
-            timeout_seconds = 900.0  # Stalled if no progress update for 15 minutes
+            timeout_seconds = 1800.0  # 30 min — allows first-time 14B model download (~28GB) + load
             for job in list(self._jobs.values()):
                 if job.status == JobStatus.PROCESSING:
                     if (now - getattr(job, 'last_updated_at', job.started_at or now)) > timeout_seconds:

@@ -355,6 +355,9 @@ class VideoPipeline:
         job_id: Optional[str] = None,
         progress_callback: Optional[Callable[[float], None]] = None,
     ) -> Dict[str, Any]:
+        # Emit 1% immediately so the UI shows activity even during model load/download
+        if progress_callback:
+            progress_callback(1.0)
         self.load_model(model_name)
         self._apply_lora(lora_name, lora_scale)
 
@@ -468,6 +471,9 @@ class VideoPipeline:
         img_bytes = base64.b64decode(source_image_b64)
         source_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
+        # Emit 1% immediately so the UI shows activity even during model load/download
+        if progress_callback:
+            progress_callback(1.0)
         self.load_model(model_name)
         self._apply_lora(lora_name, lora_scale)
 
