@@ -128,6 +128,7 @@ fi
 log "=== PHASE 4: VIDEO — WAN T2V 14B (480p, 49 frames, 50 steps) ==="
 T0=$(date +%s)
 RESP=$(curl -sf -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{"prompt":"Cinematic timelapse of storm clouds over mountains, photorealistic, golden light","model_name":"wan-t2v-14b","resolution":"480p","num_frames":49,"fps":16,"guidance_scale":7.5,"num_inference_steps":50}' 2>/dev/null || true)
 JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
 if [ -z "$JOB" ]; then
@@ -142,6 +143,7 @@ nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
 log "=== PHASE 5: VIDEO — WAN T2V 1.3B (720p, 81 frames, 50 steps) ==="
 T0=$(date +%s)
 RESP=$(curl -sf -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{"prompt":"Slow motion wave crashing on tropical beach, crystal clear water, drone shot","model_name":"wan-t2v-1.3b","resolution":"720p","num_frames":81,"fps":16,"guidance_scale":5.0,"num_inference_steps":50}' 2>/dev/null || true)
 
 JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
@@ -158,6 +160,7 @@ log "=== PHASE 6: VIDEO — WAN I2V 14B (480p, 33 frames, 30 steps) ==="
 # 1x1 white pixel PNG as base64
 IMG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 RESP=$(curl -sf -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d "{\"prompt\":\"Majestic eagle soaring over snowy mountains, cinematic\",\"model_name\":\"wan-i2v-14b\",\"source_image_b64\":\"$IMG\",\"num_frames\":33,\"fps\":16,\"guidance_scale\":5.0,\"num_inference_steps\":30}" 2>/dev/null || true)
 JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
 if [ -z "$JOB" ]; then
@@ -170,6 +173,7 @@ fi
 # ── PHASE 7: Music — ACE-Step, 60s ───────────────────────────────────────────
 log "=== PHASE 7: MUSIC — ACE-Step (60s) ==="
 RESP=$(curl -sf -X POST "$BASE/api/music/generate" -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{"prompt":"Epic cinematic orchestral score, Hollywood blockbuster, swelling strings, dramatic percussion","model_name":"ace-step","duration_seconds":60}' 2>/dev/null || true)
 JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
 if [ -z "$JOB" ]; then

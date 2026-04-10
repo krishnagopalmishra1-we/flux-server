@@ -17,7 +17,7 @@ ls -la /opt/flux-server/video_loras/ 2>/dev/null || true
 
 echo "=== [4/5] Check/restart server ==="
 # Kill any existing server
-pkill -f "gunicorn\|uvicorn" 2>/dev/null || true
+pkill -f "gunicorn|uvicorn" 2>/dev/null || true
 sleep 2
 
 # Check if .env exists

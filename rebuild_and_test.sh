@@ -33,7 +33,7 @@ if [ -z "$H" ]; then
 fi
 
 echo "=== [5/6] Verify new code is running ==="
-CNAME=$(sudo docker ps -q --filter name=flux-server 2>/dev/null | head -1)
+CNAME=$(sudo docker compose ps -q flux-server 2>/dev/null | head -1)
 if [ -z "$CNAME" ]; then
   echo "ERROR: No running flux-server container found — deploy may have failed." >&2
   exit 1

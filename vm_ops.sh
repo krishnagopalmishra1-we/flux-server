@@ -38,4 +38,4 @@ journalctl -u neural-studio --no-pager -n 50 2>/dev/null || \
   echo "No log found"
 
 echo "=== PYTHON PATH ==="
-python3 -c "import sys; print('\n'.join(sys.path))"
+python3 -c "import sys; print('\n'.join(sys.path))" 2>/dev/null || echo "python3 not available"

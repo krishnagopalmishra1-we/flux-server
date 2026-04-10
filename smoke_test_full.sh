@@ -57,11 +57,15 @@ IMG_RESP=$(curl -sf -X POST "$BASE/api/generate" \
     "height": 1024,
     "num_inference_steps": 28,
     "guidance_scale": 3.5
-  }' 2>/dev/null)
+  }' 2>/dev/null || true)
 T1=$(date +%s%N)
 MS=$(( (T1-T0)/1000000 ))
-log "FLUX 1-dev response: $(echo "$IMG_RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(f"status={d.get(\"status\",\"?\")}, width={d.get(\"width\",\"?\")}") ' 2>/dev/null || echo "$IMG_RESP")"
-log "FLUX 1-dev time: ${MS}ms"
+if [ -z "$IMG_RESP" ]; then
+  log "FLUX 1-dev: no response (request to $BASE/api/generate failed)"
+else
+  log "FLUX 1-dev response: $(echo "$IMG_RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(f"status={d.get(\"status\",\"?\")}, width={d.get(\"width\",\"?\")}") ' 2>/dev/null || echo "$IMG_RESP")"
+  log "FLUX 1-dev time: ${MS}ms"
+fi
 
 # ── 4. Video generation — WAN T2V 14B, 480p, 81 frames (max quality) ──────────
 log "=== PHASE 4: VIDEO — WAN T2V 14B (480p, 81 frames, 50 steps) ==="
@@ -76,7 +80,7 @@ VID_RESP=$(curl -sf -X POST "$BASE/api/video/generate" \
     "fps": 16,
     "guidance_scale": 7.5,
     "num_inference_steps": 50
-  }' 2>/dev/null)
+  }' 2>/dev/null || true)
 JOB_ID=$(echo "$VID_RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("job_id",""))' 2>/dev/null || true)
 log "WAN 14B T2V submitted: job_id=$JOB_ID"
 log "Response: $VID_RESP"
@@ -127,7 +131,7 @@ VID2_RESP=$(curl -sf -X POST "$BASE/api/video/generate" \
     "fps": 16,
     "guidance_scale": 5.0,
     "num_inference_steps": 50
-  }' 2>/dev/null)
+  }' 2>/dev/null || true)
 JOB2_ID=$(echo "$VID2_RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("job_id",""))' 2>/dev/null || true)
 log "WAN 1.3B T2V submitted: job_id=$JOB2_ID"
 
@@ -162,7 +166,7 @@ MUS_RESP=$(curl -sf -X POST "$BASE/api/music/generate" \
     "prompt": "Epic cinematic orchestral score with swelling strings and dramatic percussion, Hollywood blockbuster style",
     "model_name": "ace-step",
     "duration_seconds": 60
-  }' 2>/dev/null)
+  }' 2>/dev/null || true)
 MUS_JOB=$(echo "$MUS_RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("job_id",""))' 2>/dev/null || true)
 log "Music job submitted: $MUS_JOB"
 log "Response: $MUS_RESP"

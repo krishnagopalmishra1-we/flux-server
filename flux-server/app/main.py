@@ -60,7 +60,7 @@ async def _handle_video_job(job) -> dict:
     def _progress(pct: float):
         job_queue.set_progress(job.id, pct)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     if payload.get("source_image_b64"):
         fn = functools.partial(

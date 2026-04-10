@@ -31,3 +31,4 @@ fi
 
 echo "=== Container logs ==="
 sudo docker compose logs --tail=60
+

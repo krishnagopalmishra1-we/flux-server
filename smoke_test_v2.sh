@@ -119,8 +119,9 @@ RESP=$(curl -sf -X POST "$BASE/api/generate" \
 T1=$(date +%s)
 if [ -n "$RESP" ]; then
   STATUS=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" 2>/dev/null || echo "?")
+  HAS_IMAGE=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if d.get('image_base64') or d.get('image_url') else 'no')" 2>/dev/null || echo "no")
   ELAPSED=$((T1-T0))
-  if echo "$STATUS" | grep -qE "success|ok|completed|image_url|base64"; then
+  if echo "$STATUS" | grep -qE "^(success|ok|completed)$" || [ "$HAS_IMAGE" = "yes" ]; then
     pass "FLUX 1-dev generated in ${ELAPSED}s"
   else
     warn "FLUX 1-dev response: $STATUS (${ELAPSED}s) — $RESP"
@@ -230,10 +231,10 @@ else
       break
     elif [ "$STATUS" = "failed" ]; then
       ERR=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error_message',''))" 2>/dev/null || true)
-      warn "WAN I2V 14B: FAILED — $ERR"
+      fail "WAN I2V 14B: FAILED — $ERR"
       break
     elif [ $ELAPSED -gt 600 ]; then
-      warn "WAN I2V 14B: TIMEOUT"
+      fail "WAN I2V 14B: TIMEOUT"
       break
     fi
     sleep 10
