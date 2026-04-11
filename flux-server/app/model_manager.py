@@ -205,20 +205,7 @@ class MultiModelManager:
             default_steps=30,
             default_guidance_scale=5.0,
         ),
-        "ltx-video": ModelConfig(
-            model_id="Lightricks/LTX-Video",
-            pipeline_class=None,
-            category=ModelCategory.VIDEO,
-            output_type=OutputType.VIDEO_FILE,
-            pipeline_module="app.pipelines.video_pipeline",
-            quantize=False,
-            vram_free_gb=12.0,
-            description="LTX Video: Ultra-fast text-to-video drafts",
-            min_steps=20,
-            max_steps=50,
-            default_steps=30,
-            default_guidance_scale=3.0,
-        ),
+
         "hunyuan-video": ModelConfig(
             model_id="hunyuanvideo-community/HunyuanVideo",
             pipeline_class=None,
@@ -251,6 +238,18 @@ class MultiModelManager:
         if model_name not in self.MODELS:
             raise ValueError(f"Unknown model: {model_name}. Available: {list(self.MODELS.keys())}")
         return self.MODELS[model_name]
+
+    # Single source of truth for model → cache directory mapping.
+    # SSD tier: fast-path for priority models with moderate disk footprint.
+    # HDD tier: fallback for large models (WAN 14B = 118GB) or low-priority ones.
+    SSD_PRIORITY = {"flux-1-dev", "wan-t2v-1.3b", "hunyuan-video"}
+
+    def get_cache_dir(self, model_name: str) -> str:
+        """Return the appropriate cache directory for a model based on disk tier."""
+        settings = get_settings()
+        if model_name in self.SSD_PRIORITY:
+            return settings.cache_dir_ssd
+        return settings.cache_dir
     
     def list_models(self, category: ModelCategory | None = None) -> Dict[str, str]:
         """List available models with descriptions, optionally filtered by category."""
@@ -345,15 +344,7 @@ class MultiModelManager:
         logger.info(f"Loading {model_name} (needs ~{config.vram_free_gb}GB)...")
         logger.info(f"GPU: {gpu_info['name']} | Free: {gpu_info['free_gb']:.1f}GB / {gpu_info['total_gb']:.1f}GB")
 
-        # SSD-tier: 250GB SSD, 128GB free. Models that fit:
-        #   FLUX.1-dev = 32GB, HunyuanVideo NF4 = ~20GB, WAN 1.3B = 27GB → ~79GB total.
-        # WAN 14B = 118GB on disk → HDD (too large).
-        SSD_PRIORITY = {"flux-1-dev", "hunyuan-video", "wan-t2v-1.3b"}
-        cache_dir = (
-            settings.cache_dir_ssd
-            if model_name in SSD_PRIORITY
-            else settings.cache_dir
-        )
+        cache_dir = self.get_cache_dir(model_name)
 
         try:
             # Pick the right HF token for this model
@@ -370,24 +361,8 @@ class MultiModelManager:
             if config.variant:
                 load_kwargs["variant"] = config.variant
             
-            # FLUX local transformer checkpoint
-            if config.pipeline_class == FluxPipeline and config.transformer_file:
-                from diffusers import FluxTransformer2DModel
-                transformer_path = Path(config.transformer_file)
-                if not transformer_path.exists():
-                    raise RuntimeError(f"Local transformer file not found: {transformer_path}")
-                logger.info(f"Loading local FLUX transformer from {transformer_path}...")
-                transformer = FluxTransformer2DModel.from_single_file(
-                    str(transformer_path),
-                    torch_dtype=torch.bfloat16,
-                )
-                load_kwargs["transformer"] = transformer
-                pipe = FluxPipeline.from_pretrained(config.model_id, **load_kwargs)
-                logger.info(f"Moving {model_name} to {self.device}...")
-                pipe.to(self.device)
-
             # FLUX models with quantization: load transformer separately
-            elif config.quantize and config.pipeline_class == FluxPipeline:
+            if config.quantize and config.pipeline_class == FluxPipeline:
                 from diffusers import FluxTransformer2DModel
                 nf4_config = HFBitsAndBytesConfig(
                     load_in_4bit=True,
@@ -404,7 +379,8 @@ class MultiModelManager:
                     token=token if token else None,
                 )
                 load_kwargs["transformer"] = transformer
-                pipe = FluxPipeline.from_pretrained(config.model_id, device_map="balanced", **load_kwargs)
+                pipe = FluxPipeline.from_pretrained(config.model_id, **load_kwargs)
+                pipe.to(self.device)
             elif config.quantize and config.pipeline_class == StableDiffusion3Pipeline:
                 # SD3.5-Large NF4 path: quantize transformer while keeping pipeline API unchanged.
                 from diffusers import SD3Transformer2DModel
@@ -423,7 +399,8 @@ class MultiModelManager:
                     token=token if token else None,
                 )
                 load_kwargs["transformer"] = transformer
-                pipe = StableDiffusion3Pipeline.from_pretrained(config.model_id, device_map="balanced", **load_kwargs)
+                pipe = StableDiffusion3Pipeline.from_pretrained(config.model_id, **load_kwargs)
+                pipe.to(self.device)
             else:
                 # Standard loading (no quantization)
                 logger.info(f"Loading {model_name} from {config.model_id}...")

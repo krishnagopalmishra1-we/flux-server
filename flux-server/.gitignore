@@ -16,6 +16,7 @@ Thumbs.db
 
 # Local model artifacts
 loras/
+video_loras/
 
 # Python cache and tooling
 .mypy_cache/
@@ -34,5 +35,8 @@ jobs_status*.json
 job_detail*.json
 fix_fixtures.py
 
-# Assets not stored in git
-video_loras/
+# Smoke test outputs (binary/generated)
+smoketest_outputs/
+
+# Tool logs
+tools/*.log

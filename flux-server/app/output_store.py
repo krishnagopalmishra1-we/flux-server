@@ -46,6 +46,20 @@ class OutputStore:
             f"(TTL={ttl_hours}h)"
         )
 
+    def check_disk_space(self, min_gb: float = 10.0) -> None:
+        """Raise RuntimeError if free disk space is below min_gb.
+
+        Called before starting any generation to avoid writing corrupt
+        partial outputs when the disk is nearly full.
+        """
+        usage = shutil.disk_usage(str(self.base_dir))
+        free_gb = usage.free / 1e9
+        if free_gb < min_gb:
+            raise RuntimeError(
+                f"Insufficient disk space: {free_gb:.1f}GB free, {min_gb}GB required. "
+                f"Delete old outputs or expand storage."
+            )
+
     def save_file(
         self,
         content: bytes,

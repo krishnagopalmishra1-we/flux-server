@@ -12,7 +12,7 @@ services:
       - model_cache_ssd:/app/model_cache
       - outputs:/mnt/outputs
       - ./loras:/app/loras
-      - ./models:/app/models
+      - ./video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       # Set HF_OFFLINE=true in .env after first successful model download

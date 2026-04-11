@@ -4,7 +4,7 @@ Video generation pipeline — Text-to-Video and Image-to-Video.
 Supports:
 - Wan 2.2 T2V (1.3B and 14B variants)
 - Wan 2.2 I2V (Image-to-Video, 14B)
-- LTX Video (fast drafts)
+- HunyuanVideo (720p NF4-quantized)
 
 Optimization stack (applied in order):
 1. NF4 double quantization for 14B transformer (bitsandbytes)
@@ -46,6 +46,8 @@ if torch.cuda.is_available():
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(True)
+    # Reserve 5% VRAM for CUDA overhead to reduce fragmentation-related OOMs.
+    torch.cuda.set_per_process_memory_fraction(0.95)
 
 RESOLUTION_MAP = {
     "480p":  (480, 848),
@@ -169,10 +171,12 @@ class VideoPipeline:
 
         import threading
         stop_event = threading.Event()
+        _keepalive_pct = [2.0]  # mutable counter for incremental progress
         def keepalive():
-            while not stop_event.wait(30.0):
+            while not stop_event.wait(5.0):  # 5s interval (was 30s)
                 if progress_callback:
-                    progress_callback(2.0)
+                    progress_callback(_keepalive_pct[0])
+                    _keepalive_pct[0] = min(_keepalive_pct[0] + 0.5, 9.0)  # increment up to 9%
 
         keepalive_thread = threading.Thread(target=keepalive)
         keepalive_thread.daemon = True
@@ -188,16 +192,9 @@ class VideoPipeline:
                 _os.environ.setdefault("HF_HUB_OFFLINE", "1")
                 _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-            # SSD-tier: 250GB SSD, 128GB free. Video models that fit:
-            #   WAN 1.3B = 27GB → SSD. WAN 14B = 118GB → HDD (too large).
-            #   HunyuanVideo NF4 ~20GB → SSD (handled via model_manager for image path,
-            #   but video_pipeline loads it directly here).
-            SSD_PRIORITY = {"wan-t2v-1.3b", "hunyuan-video"}
-            cache_dir = (
-                settings.cache_dir_ssd
-                if model_name in SSD_PRIORITY
-                else settings.cache_dir
-            )
+            # Use model_manager as single source of truth for cache tier selection.
+            from app.model_manager import MultiModelManager
+            cache_dir = MultiModelManager().get_cache_dir(model_name)
 
             logger.info(f"Loading video model: {model_name} (cache={cache_dir})")
             try:
@@ -209,8 +206,6 @@ class VideoPipeline:
                     self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=True, settings=settings, cache_dir=cache_dir)
                 elif model_name == "wan-i2v-14b":
                     self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", settings=settings, cache_dir=cache_dir)
-                elif model_name == "ltx-video":
-                    self._load_ltx_video("Lightricks/LTX-Video", settings=settings, cache_dir=cache_dir)
                 elif model_name == "hunyuan-video":
                     self._load_hunyuan_video(settings=settings, cache_dir=cache_dir)
                 else:
@@ -295,18 +290,7 @@ class VideoPipeline:
         logger.info("  I2V NF4 quantized, all non-transformer components on GPU")
         self._apply_memory_opts()
 
-    def _load_ltx_video(self, model_id: str, settings, cache_dir: str) -> None:
-        LTXPipeline = self._resolve_pipeline_class(
-            "LTXPipeline",
-            ["diffusers.pipelines.ltx.pipeline_ltx", "diffusers.pipelines.ltx"],
-        )
-        load_kwargs = {"torch_dtype": torch.bfloat16, "cache_dir": cache_dir}
-        if settings.hf_token:
-            load_kwargs["token"] = settings.hf_token
-        self._pipe = LTXPipeline.from_pretrained(model_id, **load_kwargs)
-        self._pipe.to(self.device)
-        self._apply_memory_opts()
-        self._try_compile_transformer()
+
 
     def _load_hunyuan_video(self, settings, cache_dir: str) -> None:
         """Load HunyuanVideo with NF4-quantized transformer (fits A100 40GB).
@@ -429,6 +413,153 @@ class VideoPipeline:
             torch.cuda.synchronize()
 
     # ──────────────────────────────────────────────
+    #  Chunked Long-Video Generation
+    # ──────────────────────────────────────────────
+
+    async def generate_long_video(
+        self,
+        prompt: str,
+        model_name: str = "wan-t2v-1.3b",
+        negative_prompt: str = "",
+        resolution: str = "480p",
+        total_frames: int = 240,
+        chunk_size: int = 81,
+        chunk_overlap: int = 20,
+        fps: int = 16,
+        guidance_scale: float = 5.0,
+        num_inference_steps: int = 30,
+        seed: Optional[int] = None,
+        lora_name: Optional[str] = None,
+        lora_scale: float = 1.0,
+        job_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[float], None]] = None,
+        job=None,
+    ) -> Dict[str, Any]:
+        """Generate a long video by chunking into overlapping segments.
+
+        Chunks are generated sequentially, each with `chunk_overlap` frames
+        overlapping the previous chunk. Overlapping regions are blended
+        using cosine weights for smooth temporal transitions.
+        """
+        if progress_callback:
+            progress_callback(1.0)
+        self.load_model(model_name, progress_callback)
+        self._apply_lora(lora_name, lora_scale)
+
+        height, width = RESOLUTION_MAP.get(resolution, (480, 848))
+        height = (height // 32) * 32
+        width  = (width  // 32) * 32
+
+        generator = torch.Generator(device=self.device)
+        if seed is not None:
+            generator.manual_seed(seed)
+        else:
+            seed = generator.seed()
+
+        step = chunk_size - chunk_overlap
+        num_chunks = max(1, (total_frames - chunk_overlap + step - 1) // step)
+
+        logger.info(
+            f"Long video: {total_frames} frames in {num_chunks} chunks "
+            f"(chunk_size={chunk_size}, overlap={chunk_overlap}), model={model_name}"
+        )
+
+        if job is not None:
+            job.inference_start_time = time.time()
+
+        all_frames: list = []
+        start_time = time.perf_counter()
+
+        for chunk_idx in range(num_chunks):
+            chunk_start = chunk_idx * step
+            chunk_end = min(chunk_start + chunk_size, total_frames)
+            chunk_frames = chunk_end - chunk_start
+
+            # Per-chunk progress: map each chunk into its portion of 10-90%
+            chunk_pct_start = 10.0 + (chunk_idx / num_chunks) * 80.0
+            chunk_pct_end = 10.0 + ((chunk_idx + 1) / num_chunks) * 80.0
+            _step_cb = _make_step_callback(
+                num_inference_steps, progress_callback,
+                start=chunk_pct_start, end=chunk_pct_end, job=job,
+            )
+
+            logger.info(f"  Chunk {chunk_idx + 1}/{num_chunks}: frames {chunk_start}-{chunk_end} ({chunk_frames} frames)")
+
+            try:
+                with torch.inference_mode():
+                    output = self._pipe(
+                        prompt=prompt,
+                        negative_prompt=negative_prompt or None,
+                        height=height, width=width,
+                        num_frames=chunk_frames,
+                        guidance_scale=guidance_scale,
+                        num_inference_steps=num_inference_steps,
+                        generator=generator,
+                        callback_on_step_end=_step_cb,
+                    )
+            except torch.cuda.OutOfMemoryError:
+                logger.warning(f"OOM on chunk {chunk_idx + 1} — enabling CPU offload and retrying...")
+                torch.cuda.empty_cache()
+                gc.collect()
+                if hasattr(self._pipe, "enable_sequential_cpu_offload"):
+                    self._pipe.enable_sequential_cpu_offload()
+                with torch.inference_mode():
+                    output = self._pipe(
+                        prompt=prompt,
+                        negative_prompt=negative_prompt or None,
+                        height=height, width=width,
+                        num_frames=chunk_frames,
+                        guidance_scale=guidance_scale,
+                        num_inference_steps=num_inference_steps,
+                        generator=generator,
+                        callback_on_step_end=_step_cb,
+                    )
+
+            raw_frames = output.frames[0]
+            chunk_frame_list = list(raw_frames) if hasattr(raw_frames, "__iter__") else []
+
+            # Blend overlap region with previous chunk
+            if all_frames and chunk_overlap > 0 and len(chunk_frame_list) > chunk_overlap:
+                blended = _blend_overlap(all_frames[-chunk_overlap:], chunk_frame_list[:chunk_overlap])
+                all_frames = all_frames[:-chunk_overlap] + blended + chunk_frame_list[chunk_overlap:]
+            else:
+                all_frames.extend(chunk_frame_list)
+
+            torch.cuda.empty_cache()
+
+        # Trim to exact requested length
+        all_frames = all_frames[:total_frames]
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        if progress_callback:
+            progress_callback(92.0)
+
+        video_path = self._save_video(all_frames, fps, job_id)
+        thumbnail_b64 = self._frame_to_b64(all_frames[0] if all_frames else None)
+
+        self._unload_lora()
+        torch.cuda.empty_cache()
+
+        num_frames_out = len(all_frames)
+        duration_seconds = num_frames_out / fps
+        logger.info(
+            f"Long video complete: {num_frames_out} frames, {duration_seconds:.1f}s, "
+            f"{num_chunks} chunks, {elapsed_ms:.0f}ms"
+        )
+        if progress_callback:
+            progress_callback(100.0)
+
+        return {
+            "video_url": output_store.get_url(video_path),
+            "thumbnail_b64": thumbnail_b64,
+            "duration_seconds": round(duration_seconds, 2),
+            "inference_time_ms": round(elapsed_ms, 0),
+            "seed_used": seed,
+            "num_frames": num_frames_out,
+            "chunks_generated": num_chunks,
+        }
+
+    # ──────────────────────────────────────────────
     #  Inference — Text to Video
     # ──────────────────────────────────────────────
 
@@ -447,6 +578,7 @@ class VideoPipeline:
         lora_scale: float = 1.0,
         job_id: Optional[str] = None,
         progress_callback: Optional[Callable[[float], None]] = None,
+        job=None,
     ) -> Dict[str, Any]:
         # Emit 1% immediately so the UI shows activity even during model load/download
         if progress_callback:
@@ -471,8 +603,12 @@ class VideoPipeline:
         if progress_callback:
             progress_callback(5.0)
 
+        # Mark inference start for ETA calculation
+        if job is not None:
+            job.inference_start_time = time.time()
+
         # Build diffusers step callback that feeds into job progress
-        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
+        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90, job=job)
 
         start = time.perf_counter()
         try:
@@ -488,29 +624,62 @@ class VideoPipeline:
                     callback_on_step_end=_step_cb,
                 )
         except torch.cuda.OutOfMemoryError:
-            logger.warning("OOM during T2V — enabling sequential CPU offload and retrying...")
+            # Tiered OOM recovery: try reducing parameters before falling back to CPU offload.
             torch.cuda.empty_cache()
             gc.collect()
-            if hasattr(self._pipe, "enable_sequential_cpu_offload"):
-                self._pipe.enable_sequential_cpu_offload()
-            try:
-                with torch.inference_mode():
-                    output = self._pipe(
-                        prompt=prompt,
-                        negative_prompt=negative_prompt or None,
-                        height=height, width=width,
-                        num_frames=num_frames,
-                        guidance_scale=guidance_scale,
-                        num_inference_steps=num_inference_steps,
-                        generator=generator,
-                        callback_on_step_end=_step_cb,
-                    )
-            except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
-                logger.error(f"T2V OOM retry also failed: {retry_err}. Unloading pipeline to reset CUDA state.")
-                self.unload()
-                torch.cuda.empty_cache()
-                gc.collect()
-                raise
+            output = None
+
+            # Tier 1: reduce inference steps
+            if num_inference_steps > 20:
+                reduced_steps = max(20, num_inference_steps - 10)
+                logger.warning(f"OOM during T2V — retrying with reduced steps ({num_inference_steps} → {reduced_steps})...")
+                try:
+                    with torch.inference_mode():
+                        output = self._pipe(
+                            prompt=prompt, negative_prompt=negative_prompt or None,
+                            height=height, width=width, num_frames=num_frames,
+                            guidance_scale=guidance_scale, num_inference_steps=reduced_steps,
+                            generator=generator, callback_on_step_end=_step_cb,
+                        )
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    gc.collect()
+
+            # Tier 2: reduce frame count
+            if output is None and num_frames > 16:
+                reduced_frames = max(16, num_frames // 2)
+                logger.warning(f"OOM during T2V — retrying with reduced frames ({num_frames} → {reduced_frames})...")
+                try:
+                    with torch.inference_mode():
+                        output = self._pipe(
+                            prompt=prompt, negative_prompt=negative_prompt or None,
+                            height=height, width=width, num_frames=reduced_frames,
+                            guidance_scale=guidance_scale, num_inference_steps=max(20, num_inference_steps - 10),
+                            generator=generator, callback_on_step_end=_step_cb,
+                        )
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    gc.collect()
+
+            # Tier 3: last resort — CPU offload
+            if output is None:
+                logger.warning("OOM during T2V — enabling sequential CPU offload (last resort)...")
+                if hasattr(self._pipe, "enable_sequential_cpu_offload"):
+                    self._pipe.enable_sequential_cpu_offload()
+                try:
+                    with torch.inference_mode():
+                        output = self._pipe(
+                            prompt=prompt, negative_prompt=negative_prompt or None,
+                            height=height, width=width, num_frames=num_frames,
+                            guidance_scale=guidance_scale, num_inference_steps=num_inference_steps,
+                            generator=generator, callback_on_step_end=_step_cb,
+                        )
+                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
+                    logger.error(f"T2V OOM all retries failed: {retry_err}. Unloading pipeline.")
+                    self.unload()
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    raise
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         if progress_callback:
@@ -561,6 +730,7 @@ class VideoPipeline:
         lora_scale: float = 1.0,
         job_id: Optional[str] = None,
         progress_callback: Optional[Callable[[float], None]] = None,
+        job=None,
     ) -> Dict[str, Any]:
         img_bytes = base64.b64decode(source_image_b64)
         source_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -579,7 +749,12 @@ class VideoPipeline:
 
         if progress_callback:
             progress_callback(5.0)
-        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
+
+        # Mark inference start for ETA calculation
+        if job is not None:
+            job.inference_start_time = time.time()
+
+        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90, job=job)
 
         logger.info(f"I2V: {num_frames} frames, model={model_name}, steps={num_inference_steps}")
 
@@ -662,6 +837,7 @@ class VideoPipeline:
         seed: Optional[int] = None,
         job_id: Optional[str] = None,
         progress_callback: Optional[Callable[[float], None]] = None,
+        job=None,
     ) -> Dict[str, Any]:
         if progress_callback:
             progress_callback(1.0)
@@ -680,7 +856,12 @@ class VideoPipeline:
 
         if progress_callback:
             progress_callback(5.0)
-        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90)
+
+        # Mark inference start for ETA calculation
+        if job is not None:
+            job.inference_start_time = time.time()
+
+        _step_cb = _make_step_callback(num_inference_steps, progress_callback, start=10, end=90, job=job)
 
         logger.info(
             f"HunyuanVideo: {width}x{height}, {num_frames} frames, steps={num_inference_steps}"
@@ -820,11 +1001,15 @@ def _make_step_callback(
     progress_callback: Optional[Callable[[float], None]],
     start: float = 10.0,
     end: float = 90.0,
+    job=None,
 ) -> Optional[Callable]:
     if progress_callback is None or total_steps <= 0:
         return None
 
     def _cb(pipeline, step_index: int, timestep, callback_kwargs: dict):
+        # Check cancellation flag — raises to abort inference loop.
+        if job is not None and getattr(job, 'cancel_flag', False):
+            raise InterruptedError("Job cancelled by user request")
         pct = start + (step_index / total_steps) * (end - start)
         try:
             progress_callback(round(pct, 1))
@@ -833,6 +1018,44 @@ def _make_step_callback(
         return callback_kwargs
 
     return _cb
+
+
+def _blend_overlap(tail_frames: list, head_frames: list) -> list:
+    """Blend overlapping frames from two chunks using cosine weights.
+
+    Args:
+        tail_frames: Last N frames from the previous chunk.
+        head_frames: First N frames from the current chunk.
+
+    Returns:
+        Blended frames (same length as inputs).
+    """
+    import numpy as np
+    from PIL import Image as _PILImage
+
+    n = min(len(tail_frames), len(head_frames))
+    blended = []
+    for i in range(n):
+        # Cosine weight: 1.0 at start (all tail) → 0.0 at end (all head)
+        w = 0.5 * (1.0 + np.cos(np.pi * i / max(n - 1, 1)))
+
+        a = tail_frames[i]
+        b = head_frames[i]
+
+        # Convert to numpy arrays
+        arr_a = np.array(a).astype(np.float32)
+        arr_b = np.array(b).astype(np.float32)
+
+        # Weighted blend
+        arr_out = (w * arr_a + (1.0 - w) * arr_b).clip(0, 255).astype(np.uint8)
+
+        # Return as PIL Image if inputs were PIL
+        if isinstance(a, _PILImage.Image):
+            blended.append(_PILImage.fromarray(arr_out))
+        else:
+            blended.append(arr_out)
+
+    return blended
 
 
 # Module-level singleton

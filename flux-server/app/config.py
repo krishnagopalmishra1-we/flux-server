@@ -27,7 +27,12 @@ class Settings(BaseSettings):
 
     # Security
     api_keys: str = ""  # Comma-separated valid API keys
+    admin_api_key: str = ""  # Separate key for admin endpoints (queue drain, etc.)
     rate_limit_per_minute: int = 10
+
+    # CORS — restrict to your frontend domain in production.
+    # Use "*" for dev (default). Comma-separated origins for production.
+    cors_origins: str = "*"
 
     # Generation defaults (image)
     default_width: int = 1024

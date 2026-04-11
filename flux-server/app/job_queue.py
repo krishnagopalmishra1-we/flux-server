@@ -53,6 +53,11 @@ class Job:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     last_updated_at: float = field(default_factory=time.time)
+    # Cancellation flag — checked during inference step callbacks.
+    cancel_flag: bool = False
+    # Inference timing — set when the first inference step begins (after model load).
+    inference_start_time: Optional[float] = None
+    estimated_seconds_remaining: Optional[int] = None
 
     @property
     def queue_time_ms(self) -> float:
@@ -83,6 +88,7 @@ class Job:
             "created_at": self.created_at,
             "queue_time_ms": round(self.queue_time_ms, 0),
             "processing_time_ms": round(self.processing_time_ms, 0),
+            "estimated_seconds_remaining": self.estimated_seconds_remaining,
         }
 
 
@@ -147,6 +153,13 @@ class JobQueue:
         if job:
             job.progress = clamped
             job.last_updated_at = time.time()
+            # Compute ETA once enough progress has been made.
+            if job.inference_start_time and clamped > 5:
+                elapsed = time.time() - job.inference_start_time
+                rate = clamped / elapsed  # % per second
+                if rate > 0:
+                    remaining = (100.0 - clamped) / rate
+                    job.estimated_seconds_remaining = int(remaining)
 
         # Schedule queue puts on the event loop — put_nowait is not thread-safe from
         # a worker thread, so we use call_soon_threadsafe to hand off to the loop.
@@ -287,15 +300,20 @@ class JobQueue:
         return [j.to_dict() for j in jobs[:limit]]
 
     def cancel_job(self, job_id: str) -> bool:
-        """Cancel a queued job. Returns True if cancelled, False if not found or already processing."""
+        """Cancel a queued or processing job. Returns True if cancelled."""
         job = self._jobs.get(job_id)
         if not job:
             return False
-        if job.status != JobStatus.QUEUED:
-            return False
-        job.status = JobStatus.CANCELLED
-        logger.info(f"Job cancelled: {job_id[:8]}...")
-        return True
+        if job.status == JobStatus.QUEUED:
+            job.status = JobStatus.CANCELLED
+            logger.info(f"Job cancelled (was queued): {job_id[:8]}...")
+            return True
+        if job.status == JobStatus.PROCESSING:
+            # Set cancel flag — checked during inference step callbacks.
+            job.cancel_flag = True
+            logger.info(f"Job cancel requested (processing): {job_id[:8]}...")
+            return True
+        return False
 
     def queue_stats(self) -> Dict[str, Any]:
         """Get queue statistics."""

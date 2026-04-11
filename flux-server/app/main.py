@@ -8,8 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import hashlib
-from app.schemas import GenerateRequest, GenerateResponse, HealthResponse
 from app.schemas_v2 import (
+    GenerateRequest, GenerateResponse, HealthResponse,
     VideoGenerateRequest, VideoGenerateResponse,
     JobStatusResponse, QueueStatusResponse,
 )
@@ -19,8 +19,7 @@ from app.model_manager import ModelCategory
 from app.job_queue import job_queue, JobPriority, JobStatus
 from app.output_store import output_store
 from app.pipelines.video_pipeline import video_pipeline
-from app.dataset_plan import get_dataset_plan, available_domains
-from app.training_presets import get_lora_preset
+
 from app.config import get_settings
 
 # Configure logging
@@ -51,7 +50,9 @@ async def _handle_video_job(job) -> dict:
     """
     import functools
     payload = job.payload
-    flux_pipeline.model_manager.unload_all()
+
+    # Check disk space before starting generation
+    output_store.check_disk_space(min_gb=10.0)
 
     def _progress(pct: float):
         job_queue.set_progress(job.id, pct)
@@ -74,6 +75,7 @@ async def _handle_video_job(job) -> dict:
             lora_scale=payload.get("lora_scale", 1.0),
             job_id=job.id,
             progress_callback=_progress,
+            job=job,
         )
     elif job.model_name == "hunyuan-video":
         fn = functools.partial(
@@ -88,25 +90,53 @@ async def _handle_video_job(job) -> dict:
             seed=payload.get("seed"),
             job_id=job.id,
             progress_callback=_progress,
+            job=job,
         )
     else:
-        fn = functools.partial(
-            _run_sync,
-            video_pipeline.generate_text_to_video,
-            prompt=payload["prompt"],
-            model_name=job.model_name,
-            negative_prompt=payload.get("negative_prompt", ""),
-            resolution=payload.get("resolution", "480p"),
-            num_frames=payload.get("num_frames", 33),
-            fps=payload.get("fps", 16),
-            guidance_scale=payload.get("guidance_scale", 5.0),
-            num_inference_steps=payload.get("num_inference_steps", 30),
-            seed=payload.get("seed"),
-            lora_name=payload.get("lora_name"),
-            lora_scale=payload.get("lora_scale", 1.0),
-            job_id=job.id,
-            progress_callback=_progress,
-        )
+        num_frames = payload.get("num_frames", 33)
+        chunk_size = payload.get("chunk_size", 81)
+
+        # Auto-detect: use chunked generation for long videos
+        if num_frames > chunk_size:
+            fn = functools.partial(
+                _run_sync,
+                video_pipeline.generate_long_video,
+                prompt=payload["prompt"],
+                model_name=job.model_name,
+                negative_prompt=payload.get("negative_prompt", ""),
+                resolution=payload.get("resolution", "480p"),
+                total_frames=num_frames,
+                chunk_size=chunk_size,
+                chunk_overlap=payload.get("chunk_overlap", 20),
+                fps=payload.get("fps", 16),
+                guidance_scale=payload.get("guidance_scale", 5.0),
+                num_inference_steps=payload.get("num_inference_steps", 30),
+                seed=payload.get("seed"),
+                lora_name=payload.get("lora_name"),
+                lora_scale=payload.get("lora_scale", 1.0),
+                job_id=job.id,
+                progress_callback=_progress,
+                job=job,
+            )
+        else:
+            fn = functools.partial(
+                _run_sync,
+                video_pipeline.generate_text_to_video,
+                prompt=payload["prompt"],
+                model_name=job.model_name,
+                negative_prompt=payload.get("negative_prompt", ""),
+                resolution=payload.get("resolution", "480p"),
+                num_frames=num_frames,
+                fps=payload.get("fps", 16),
+                guidance_scale=payload.get("guidance_scale", 5.0),
+                num_inference_steps=payload.get("num_inference_steps", 30),
+                seed=payload.get("seed"),
+                lora_name=payload.get("lora_name"),
+                lora_scale=payload.get("lora_scale", 1.0),
+                job_id=job.id,
+                progress_callback=_progress,
+                job=job,
+            )
     return await loop.run_in_executor(None, fn)
 
 
@@ -125,9 +155,11 @@ def _run_sync(coro_fn, **kwargs):
         loop.close()
 
 
-# Lock that serialises GPU-heavy operations so image generation,
-# video pre-loading, and queued jobs never fight for VRAM at the same time.
-_gpu_lock = asyncio.Lock()
+# Separate GPU locks for image and video generation so a long video job
+# doesn't block a fast image request. On a single GPU both locks serialize
+# implicitly (each handler unloads the other modality's model first).
+_gpu_lock_image = asyncio.Lock()
+_gpu_lock_video = asyncio.Lock()
 
 
 async def _preload_video_model_background():
@@ -146,14 +178,17 @@ async def lifespan(app: FastAPI):
     # Register job handlers for async generation
     job_queue.register_handler("video", _handle_video_job)
 
-    # Share the GPU lock with the job queue so video jobs
-    # cannot run concurrently with image generation endpoints.
-    job_queue.gpu_lock = _gpu_lock
+    # Share the video GPU lock with the job queue so video jobs
+    # are serialised through the lock.
+    job_queue.gpu_lock = _gpu_lock_video
 
     # Create output directories
     settings = get_settings()
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.output_dir).joinpath("video").mkdir(exist_ok=True)
+
+    # Schedule periodic output cleanup (runs every hour, deletes files older than TTL)
+    cleanup_task = asyncio.create_task(_periodic_output_cleanup())
 
     # Keep startup fast and responsive; launch background model pre-loading
     # while server immediately becomes ready to accept requests.
@@ -162,6 +197,7 @@ async def lifespan(app: FastAPI):
     yield
     # Cleanup on shutdown
     logger.info("Shutting down, releasing GPU memory...")
+    cleanup_task.cancel()
     preload_task.cancel()
     try:
         await preload_task
@@ -171,6 +207,18 @@ async def lifespan(app: FastAPI):
     video_pipeline.unload()
 
 
+async def _periodic_output_cleanup():
+    """Background task that cleans up expired output files every hour."""
+    while True:
+        await asyncio.sleep(3600)  # Every hour
+        try:
+            deleted = output_store.cleanup_expired()
+            if deleted:
+                logger.info(f"Periodic cleanup: removed {deleted} expired output files")
+        except Exception as e:
+            logger.warning(f"Periodic output cleanup error: {e}")
+
+
 app = FastAPI(
     title="Neural Creation Studio API",
     description="AI generation platform: Image and Video. Powered by FLUX and Wan 2.2.",
@@ -178,10 +226,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — restrict allow_origins to your frontend domain in production
+# CORS — uses cors_origins from config (defaults to "*" for dev).
+# In production, set CORS_ORIGINS="https://your-frontend.com" in .env.
+_cors_settings = get_settings()
+_cors_origins = (
+    [o.strip() for o in _cors_settings.cors_origins.split(",")]
+    if _cors_settings.cors_origins != "*"
+    else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
@@ -254,22 +309,7 @@ async def upload_lora(file: UploadFile = File(...)):
     return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents)}
 
 
-@app.get("/datasets/domains")
-async def dataset_domains():
-    """List available dataset planning domains."""
-    return {"domains": available_domains()}
 
-
-@app.get("/datasets/plan/{domain}")
-async def dataset_plan(domain: str):
-    """Return recommended dataset composition for a domain."""
-    return get_dataset_plan(domain)
-
-
-@app.get("/training/preset/{style}")
-async def training_preset(style: str):
-    """Return LoRA training hyperparameter preset."""
-    return get_lora_preset(style)
 
 
 def _run_image_generation(req: GenerateRequest) -> tuple[str, int, float]:
@@ -302,7 +342,7 @@ async def generate(
     check_rate_limit(request, api_key)
 
     try:
-        async with _gpu_lock:
+        async with _gpu_lock_image:
             img_b64, seed_used, elapsed_ms = await asyncio.to_thread(
                 _run_image_generation, req
             )
@@ -321,29 +361,7 @@ async def generate(
     )
 
 
-@app.post("/generate-ui", response_model=GenerateResponse)
-async def generate_ui(req: GenerateRequest, request: Request):
-    """Browser-facing generation endpoint for the built-in UI."""
-    check_rate_limit(request, "")
 
-    try:
-        async with _gpu_lock:
-            img_b64, seed_used, elapsed_ms = await asyncio.to_thread(
-                _run_image_generation, req
-            )
-    except RuntimeError as e:
-        logger.error(f"Image generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        logger.exception("Unexpected error during image generation")
-        raise HTTPException(status_code=500, detail="Image generation failed. Check server logs.")
-
-    return GenerateResponse(
-        status="completed",
-        image_base64=img_b64,
-        seed_used=seed_used,
-        inference_time_ms=elapsed_ms,
-    )
 
 
 # ═══════════════════════════════════════════════════
@@ -403,6 +421,7 @@ async def get_job_status(job_id: str):
         queue_position=position,
         queue_time_ms=job.queue_time_ms,
         processing_time_ms=job.processing_time_ms,
+        estimated_seconds_remaining=job.estimated_seconds_remaining,
     )
 
 
@@ -417,12 +436,12 @@ async def list_jobs(request: Request, status: str = None, limit: int = 20):
 
 @app.delete("/api/jobs/{job_id}")
 async def cancel_job(job_id: str):
-    """Cancel a queued job."""
+    """Cancel a queued or processing job."""
     if job_queue.cancel_job(job_id):
         return {"status": "cancelled", "job_id": job_id}
     raise HTTPException(
         status_code=400,
-        detail="Job cannot be cancelled (not found or already processing)."
+        detail="Job cannot be cancelled (not found or already completed)."
     )
 
 
@@ -431,6 +450,31 @@ async def queue_status():
     """Get current queue statistics."""
     stats = job_queue.queue_stats()
     return QueueStatusResponse(**stats)
+
+
+@app.post("/api/admin/queue/drain")
+async def drain_queue(request: Request):
+    """Cancel all queued jobs and set cancel_flag on processing jobs.
+
+    Requires Admin-Key header matching the admin_api_key config.
+    """
+    settings = get_settings()
+    admin_key = request.headers.get("Admin-Key", "")
+    if not settings.admin_api_key or admin_key != settings.admin_api_key:
+        raise HTTPException(status_code=403, detail="Invalid or missing Admin-Key.")
+
+    cancelled = 0
+    flagged = 0
+    for job in list(job_queue._jobs.values()):
+        if job.status == JobStatus.QUEUED:
+            job.status = JobStatus.CANCELLED
+            cancelled += 1
+        elif job.status == JobStatus.PROCESSING:
+            job.cancel_flag = True
+            flagged += 1
+
+    logger.warning(f"Admin queue drain: cancelled {cancelled} queued, flagged {flagged} processing")
+    return {"cancelled": cancelled, "flagged_for_cancel": flagged}
 
 
 # ═══════════════════════════════════════════════════

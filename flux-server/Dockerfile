@@ -43,9 +43,9 @@ COPY app/ ./app/
 COPY gunicorn.conf.py .
 
 # Create directories with correct permissions
-RUN mkdir -p loras /mnt/outputs/video /mnt/outputs/audio /mnt/outputs/animation \
+RUN mkdir -p loras video_loras /mnt/outputs/video \
         /app/model_cache && \
-    chown -R appuser:appuser loras /mnt/outputs /app/model_cache
+    chown -R appuser:appuser loras video_loras /mnt/outputs /app/model_cache
 
 # Run as non-root for security
 USER appuser

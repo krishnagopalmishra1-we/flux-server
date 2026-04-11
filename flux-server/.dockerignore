@@ -20,5 +20,12 @@ Thumbs.db
 
 # Local data not needed in image
 loras/
-models/
-outputs/
+video_loras/
+smoketest_outputs/
+
+# Documentation and tools (not needed at runtime)
+docs/
+tools/
+deploy/
+*.md
+!app/**/*.md

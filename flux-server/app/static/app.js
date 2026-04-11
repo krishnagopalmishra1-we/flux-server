@@ -37,7 +37,7 @@ const state = {
   loras: ["None"],
   // Video
   videoForm: {
-    prompt: "", negative_prompt: "", model_name: "ltx-video",
+    prompt: "", negative_prompt: "", model_name: "wan-t2v-1.3b",
     resolution: "480p", num_frames: 33, fps: 16,
     guidance_scale: 5.0, num_inference_steps: 30, seed: "",
     source_image_b64: null, lora_name: "None", lora_scale: 1.0,
@@ -241,7 +241,7 @@ async function onGenerate(e) {
     use_refiner: false,
   };
   try {
-    const { response, data } = await fetchJson("/generate-ui",{
+    const { response, data } = await fetchJson("/generate",{
       method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
     });
     if (!response.ok) { state.error=data?.detail||"Generation failed."; }
