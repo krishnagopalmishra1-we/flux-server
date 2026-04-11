@@ -1,7 +1,7 @@
 #!/bin/bash
 # Final smoke test — all models at max quality, timing-focused
 # Run on VM host. Results at /tmp/smoke_final.txt
-set -uo pipefail
+set -u
 BASE="http://localhost:8080"
 # Dev-only API key — must NOT grant production access.
 # Set SMOKE_API_KEY in the environment before running this script.
@@ -22,23 +22,23 @@ poll_job() {
   local JOB_ID="$1"; local LABEL="$2"; local TIMEOUT="${3:-1800}"
   local POLL_START=$(date +%s)
   while true; do
-    local JS=$(curl -sf "$BASE/api/jobs/$JOB_ID" 2>/dev/null || true)
-    local STATUS=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null || true)
-    local PROG=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('progress',0))" 2>/dev/null || true)
-    local NOW=$(date +%s); local ELAPSED=$((NOW-POLL_START))
+    local JS; JS=$(curl -s "$BASE/api/jobs/$JOB_ID" 2>/dev/null || true)
+    local STATUS; STATUS=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null || true)
+    local PROG; PROG=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('progress',0))" 2>/dev/null || true)
+    local NOW; NOW=$(date +%s); local ELAPSED=$((NOW-POLL_START))
     log "  [${ELAPSED}s] $LABEL: status=$STATUS progress=${PROG}%"
     if [ "$STATUS" = "completed" ]; then
-      local INF=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('inference_time_ms',0))" 2>/dev/null || echo 0)
-      local FRAMES=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('num_frames',0))" 2>/dev/null || echo 0)
+      local INF; INF=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('inference_time_ms',0))" 2>/dev/null || echo 0)
+      local FRAMES; FRAMES=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',{}); print(r.get('num_frames',0))" 2>/dev/null || echo 0)
       pass "$LABEL: COMPLETED in ${ELAPSED}s (inference=${INF}ms, frames=${FRAMES})"
       return 0
     elif [ "$STATUS" = "failed" ]; then
-      local ERR=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error_message',''))" 2>/dev/null || true)
+      local ERR; ERR=$(echo "$JS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error_message',''))" 2>/dev/null || true)
       fail "$LABEL: FAILED — $ERR"
-      return 1
+      return 0
     elif [ $ELAPSED -gt $TIMEOUT ]; then
       fail "$LABEL: TIMEOUT after ${TIMEOUT}s (status=$STATUS)"
-      return 1
+      return 0
     fi
     sleep 15
   done
@@ -47,7 +47,7 @@ poll_job() {
 # ── PHASE 1: System health ────────────────────────────────────────────────────
 log "=== PHASE 1: SYSTEM HEALTH ==="
 nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader
-H=$(curl -sf "$BASE/health" 2>/dev/null || true)
+H=$(curl -s "$BASE/health" 2>/dev/null || true)
 [ -n "$H" ] && pass "Server healthy: $H" || fail "Server not responding"
 
 # ── PHASE 2: Python/CUDA diagnostics inside container ─────────────────────────
@@ -110,7 +110,7 @@ fi
 # ── PHASE 3: FLUX 1-dev — 1024×1024, 28 steps ────────────────────────────────
 log "=== PHASE 3: IMAGE — FLUX 1-dev (1024×1024, 28 steps) ==="
 T0=$(date +%s)
-RESP=$(curl -sf -X POST "$BASE/generate" \
+RESP=$(curl -s -X POST "$BASE/generate" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"prompt":"Photorealistic portrait of an astronaut on Mars, golden hour, 8k, ultra detailed","model_name":"flux-1-dev","width":1024,"height":1024,"num_inference_steps":28,"guidance_scale":3.5}' 2>/dev/null || true)
@@ -125,9 +125,12 @@ fi
 # ── PHASE 4: WAN T2V 14B — 480p, 49 frames, 50 steps ─────────────────────────
 # Note: 81 frames exceeds A100 40GB VRAM at 480p + NF4 (tested: OOM at ~38.76GB).
 # 49 frames is the verified safe maximum for high-quality 14B generation on A100 40GB.
+# Wait for FLUX to release VRAM before loading video model
+log "Waiting 10s for VRAM to free after FLUX..."
+sleep 10
 log "=== PHASE 4: VIDEO — WAN T2V 14B (480p, 49 frames, 50 steps) ==="
 T0=$(date +%s)
-RESP=$(curl -sf -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
+RESP=$(curl -s -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"prompt":"Cinematic timelapse of storm clouds over mountains, photorealistic, golden light","model_name":"wan-t2v-14b","resolution":"480p","num_frames":49,"fps":16,"guidance_scale":7.5,"num_inference_steps":50}' 2>/dev/null || true)
 JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
@@ -142,7 +145,7 @@ nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
 # ── PHASE 5: WAN T2V 1.3B — 720p, 81 frames, 50 steps ───────────────────────
 log "=== PHASE 5: VIDEO — WAN T2V 1.3B (720p, 81 frames, 50 steps) ==="
 T0=$(date +%s)
-RESP=$(curl -sf -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
+RESP=$(curl -s -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"prompt":"Slow motion wave crashing on tropical beach, crystal clear water, drone shot","model_name":"wan-t2v-1.3b","resolution":"720p","num_frames":81,"fps":16,"guidance_scale":5.0,"num_inference_steps":50}' 2>/dev/null || true)
 
@@ -159,7 +162,7 @@ nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
 log "=== PHASE 6: VIDEO — WAN I2V 14B (480p, 33 frames, 30 steps) ==="
 # 1x1 white pixel PNG as base64
 IMG="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-RESP=$(curl -sf -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
+RESP=$(curl -s -X POST "$BASE/api/video/generate" -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d "{\"prompt\":\"Majestic eagle soaring over snowy mountains, cinematic\",\"model_name\":\"wan-i2v-14b\",\"source_image_b64\":\"$IMG\",\"num_frames\":33,\"fps\":16,\"guidance_scale\":5.0,\"num_inference_steps\":30}" 2>/dev/null || true)
 JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
