@@ -251,19 +251,18 @@ python tools/test_hq.py --server http://<ip>:8080
 app/
 ├── main.py              # FastAPI app, all endpoints, job handler
 ├── config.py            # Pydantic settings from environment
-├── schemas_v2.py        # All API schemas (image + video + jobs)
+├── schemas.py           # All API schemas (image + video + jobs)
 ├── model_manager.py     # Model registry, loading, VRAM management
-├── pipeline_new.py      # Image generation pipeline
+├── pipeline.py          # Image generation pipeline
 ├── job_queue.py         # Async job queue + cancellation + ETA
 ├── output_store.py      # File storage + disk guard + cleanup
 ├── security.py          # API key auth + rate limiting
-├── ui.py                # Built-in web UI template
 └── pipelines/
     └── video_pipeline.py  # Video generation (T2V, I2V, chunked)
 ```
 
 ### Key Implementation Notes
-- **Schemas**: All in `schemas_v2.py` — no separate schema files
+- **Schemas**: All in `schemas.py` — no separate schema files
 - **Cache tiers**: Controlled by `MultiModelManager.get_cache_dir()` — single source of truth
 - **GPU locks**: Separate for image (`_gpu_lock_image`) and video (`_gpu_lock_video`)
 - **Job cancellation**: `cancel_flag` checked in step callback → raises `InterruptedError`

@@ -58,13 +58,12 @@ flux-server/
 ├── app/
 │   ├── main.py              # FastAPI app, endpoints, job handler, lifespan
 │   ├── config.py             # Pydantic settings (env-driven)
-│   ├── schemas_v2.py         # ALL request/response schemas (image + video + jobs)
+│   ├── schemas.py            # ALL request/response schemas (image + video + jobs)
 │   ├── model_manager.py      # MultiModelManager — model registry, loading, VRAM mgmt
-│   ├── pipeline_new.py       # Image generation pipeline (FluxInferencePipeline)
+│   ├── pipeline.py           # Image generation pipeline (FluxInferencePipeline)
 │   ├── job_queue.py          # Async job queue with priority, cancellation, ETA
 │   ├── output_store.py       # File storage, cleanup cron, disk space guard
 │   ├── security.py           # API key auth, rate limiting
-│   ├── ui.py                 # Jinja2 HTML template for built-in UI
 │   ├── pipelines/
 │   │   └── video_pipeline.py # Video generation — T2V, I2V, HunyuanVideo, chunked long-video
 │   └── static/

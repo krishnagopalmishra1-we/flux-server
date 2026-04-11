@@ -8,13 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import hashlib
-from app.schemas_v2 import (
+from app.schemas import (
     GenerateRequest, GenerateResponse, HealthResponse,
     VideoGenerateRequest, VideoGenerateResponse,
     JobStatusResponse, QueueStatusResponse,
 )
 from app.security import verify_api_key, check_rate_limit
-from app.pipeline_new import inference_pipeline as flux_pipeline
+from app.pipeline import inference_pipeline as flux_pipeline
 from app.model_manager import ModelCategory
 from app.job_queue import job_queue, JobPriority, JobStatus
 from app.output_store import output_store
