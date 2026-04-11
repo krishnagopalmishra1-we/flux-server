@@ -1,7 +1,7 @@
 #!/bin/bash
 # Final smoke test — all models at max quality, timing-focused
 # Run on VM host. Results at /tmp/smoke_final.txt
-set -u
+set -uo pipefail
 BASE="http://localhost:8080"
 # Dev-only API key — must NOT grant production access.
 # Set SMOKE_API_KEY in the environment before running this script.
@@ -47,7 +47,7 @@ poll_job() {
 # ── PHASE 1: System health ────────────────────────────────────────────────────
 log "=== PHASE 1: SYSTEM HEALTH ==="
 nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader
-H=$(curl -s "$BASE/health" 2>/dev/null || true)
+H=$(curl -sSf "$BASE/health" 2>/dev/null || true)
 [ -n "$H" ] && pass "Server healthy: $H" || fail "Server not responding"
 
 # ── PHASE 2: Python/CUDA diagnostics inside container ─────────────────────────

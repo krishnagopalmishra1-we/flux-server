@@ -1,218 +1,155 @@
 # NEURAL CREATION STUDIO — FINAL STATUS REPORT
 
-## ✅ DEPLOYMENT SUCCESS
+**Last Updated**: April 11, 2026  
+**Session**: Smoke Test, Quality Validation, Performance Tuning  
+**Status**: 🟢 All Image Models Passing | 🟡 Video Models Working (load time optimization needed)
 
-**Server Status**: Online and Responding ✓  
-**IP Address**: 34.55.244.1:8080  
+---
+
+## LIVE SERVER
+
+**VM**: `flux-a100-preemptible` — GCP `us-central1-a`  
 **GPU**: NVIDIA A100-SXM4-40GB (39.49 GB VRAM)  
-**Model Registry**: All 12+ models registered  
-**Job Queue**: Ready for async tasks  
-
----
-
-##  COMPREHENSIVE FIXES APPLIED
-
-### 1. Image Generation — Non-Blocking Architecture ✓
-- **Fix**: Wrapped in `asyncio.to_thread()` to prevent UI freeze
-- **Fix**: Added `_gpu_lock` serialization to prevent OOM
-- **Fix**: Unloads video/music/animation models before image gen
-- **Status**: Code ready, testing revealed memory issues with FLUX
-
-### 2. GPU Memory Management ✓
-- **Fix**: `_gpu_lock = asyncio.Lock()` prevents concurrent model loads
-- **Fix**: All VRAM-intensive operations queue through lock
-- **Status**: Verified - prevents race conditions
-
-### 3. Video LoRA Support ✓
-- **Fix**: Added `lora_name` and `lora_scale` fields to schema
-- **Fix**: Handler passes LoRA params through to pipeline
-- **Fix**: Frontend UI ready with LoRA selector dropdown
-- **Status**: Schema complete, implementation deferred for stability
-
-### 4. Video Generation (Async Job Queue) ✓
-- **Status**: Queue system ready and functional
-- **Modalities**: Video, Music, Animation all use job queue
-- **Testing**: Needs validation with actual generation
-
-### 5. Server Stability Features ✓
-- **Fix**: Disabled problematic Wan 2.2 background pre-load
-- **Fix**: Added comprehensive error handling on endpoints
-- **Fix**: CORS updated to include DELETE method
-- **Status**: Server starts clean, responds to health checks
-
----
-
-## TEST RESULTS SUMMARY
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| **Server Health** | ✓ PASS | Health endpoint responsive, O GPU detected |
-| **API Endpoints** | ✓ PASS | All routes registered and accessible |
-| **Job Queue** | ✓ PASS | Video job submission accepted |
-| **Image Gen - FLUX | ⚠️ ISSUE | Causes server hang/OOM during inference |
-| **Video Gen - LTX | 🔄 TESTING | Job submitted, awaiting final results |
-| **Music Gen** | 📋 PENDING | Code ready, not yet tested |
-| **Animation Gen** | 📋 PENDING | Code ready, not yet tested |
-
----
-
-## KNOWN ISSUES & SOLUTIONS
-
-### Issue: FLUX 1-dev Causes OOM/Hang
-**Symptom**: Server becomes unresponsive when generating image with FLUX  
-**Root Cause**: Model is very large (20GB+), asyncio.to_thread may not be isolating memory properly  
-**Workaround Options**:
-1. Use SD3 or SDXL instead (smaller models, faster)
-2. Reduce image resolution to 512x512 instead of 1024x1024
-3. Reduce num_inference_steps to 15-20
-4. Kill other models before testing image generation
-
-### Issue: Video LoRA Implementation Deferred
-**Status**: Schema ready, implementation is no-op  
-**Reason**: Wan pipeline LoRA support uncertain with current diffusers version  
-**Timeline**: Can be enabled once we confirm Wan supports `load_lora_weights()`
-
-### Known Model Limitations
-- **ACE-Step**: HF library incompatibility, use AudioLDM2 instead
-- **Stable Audio**: Gated model, requires HF_TOKEN in .env
-- **Wan T2V 14B**: First run downloads 50GB, takes 30+ minutes
-
----
-
-## RECOMMENDED TESTING ORDER
-
-### Phase 1: Validate Architecture (Right Now)
-```powershell
-# Test health endpoint
-Invoke-RestMethod "http://34.55.244.1:8080/health"
-
-# Test queue status
-Invoke-RestMethod "http://34.55.244.1:8080/api/queue/status"
-
-# Submit a video job (non-blocking test)
-$payload = @{prompt="cat running"; model_name="ltx-video"; resolution="480p"; num_frames=16} | ConvertTo-Json
-Invoke-RestMethod "http://34.55.244.1:8080/api/video/generate" -Method POST -Body $payload -ContentType "application/json"
-```
-
-### Phase 2: Test Image Generation (With Workarounds)
-```powershell
-# Test SD3 instead of FLUX (smaller model)
-$payload = @{
-    prompt = "sunset"
-    model_name = "sd3-medium"  # Use this instead of flux-1-dev
-    width = 512
-    height = 512
-    num_inference_steps = 20
-} | ConvertTo-Json
-
-Invoke-RestMethod "http://34.55.244.1:8080/generate-ui" -Method POST -Body $payload -ContentType "application/json" -TimeoutSec 300
-```
-
-### Phase 3: Complete Model Validation
-Once basic models work:
-1. Test all image models (FLUX, SD3, SDXL)
-2. Test all video models (LTX, Wan 1.3B, Wan 14B)
-3. Test music models (AudioLDM2, MusicGen)
-4. Test animation models (EchoMimic, LiveAvatar)
-
----
-
-## FILES READY FOR PRODUCTION
-
-| File | Purpose | Status |
-|------|---------|--------|
-| app/main.py | FastAPI server + endpoints + GPU lock | ✓ Ready |
-| app/pipeline_new.py | Image inference (FLUX, SD3, SDXL) | ✓ Ready |
-| app/pipelines/video_pipeline.py | Video inference (Wan, LTX) | ✓ Ready |
-| app/pipelines/music_pipeline.py | Music inference | ✓ Ready |
-| app/pipelines/animation_pipeline.py | Animation inference | ✓ Ready |
-| app/job_queue.py | Async job queue system | ✓ Ready |
-| app/static/app.js | Frontend UI | ✓ Ready |
-| docker-compose.yml | Container orchestration | ✓ Ready |
-
----
-
-## CRITICAL ITEMS FOR NEXT SESSION
-
-### 🔴 Must Fix BEFORE Production
-1. **FLUX Memory Issue** — Image generation hangs server
-   - Options: Use SD3/SDXL, reduce res, or fix FLUX memory management
-2. **Wan LoRA Support** — Verify if pipeline supports diffusers LoRA API
-   - Check: `hasattr(pipeline, 'load_lora_weights')`
-   - May need peft integration
-
-### 🟡 Should Test
-1. Music generation (AudioLDM2, MusicGen, ACE-Step, Stable Audio)
-2. Animation generation (face + audio)
-3. Stress test with multiple concurrent jobs
-4. Memory profiling to identify exact OOM points
-
-### 🟢 Can Enable Later
-1. Wan 2.2 T2V 1.3B background pre-loading
-2. Video LoRA selection in UI (once backend supports it)
-3. Model quantization for faster inference
-
----
-
-## SERVER CONFIG REFERENCE
-
 **Port**: 8080  
-**Workers**: 1 (1 process per GPU)  
-**Timeout**: 3600s (for heavy model downloads)  
-**CORS**: GET, POST, DELETE on all origins  
-**Auth**: API key optional (verify_api_key allows empty)  
-**Rate Limit**: 10 req/min per IP  
-
-**Volumes**:
-- `/mnt/hf-cache` — Model cache (connect to 500GB disk)
-- `/opt/flux-server/loras` — LoRA files
-- `/mnt/outputs` — Generated files (video/audio/animation)
+**Auth**: API key required (`X-API-Key` header)
 
 ---
 
-## NEXT IMMEDIATE ACTIONS
+## MODEL STATUS (Tested 2026-04-11)
 
-1. **Test Video Generation** (should be working now)
-   ```
-   Submit LTX Video job → Poll for completion → Verify output
-   ```
+### Image Models — All PASSING
 
-2. **Fix Image Generation** (choose one):
-   - Option A: Switch from FLUX to SD3 for testing
-   - Option B: Reduce FLUX resolution to 512x512
-   - Option C: Investigate FLUX VRAM/memory leak
+| Model | Key | Resolution | Steps | Result |
+|-------|-----|-----------|-------|--------|
+| FLUX.1-dev | `flux-1-dev` | 1024x1024 | 28 | PASS (~46s) |
+| SD3.5 Large | `sd3.5-large` | 768x768 | 28 | PASS |
+| RealVisXL V5.0 | `realvisxl` | 512x512 | 20 | PASS |
+| Juggernaut XL v9 | `juggernaut-xl` | 512x512 | 20 | PASS |
 
-3. **Complete Model Testing** (systematically validate remaining models)
+### Video Models — Working, Load Time Optimization Needed
 
-4. **Enable Production Features** (once all models validated):
-   - Re-enable Wan pre-load
-   - Enable video LoRA if supported
-   - Setup monitoring/logging
+| Model | Key | Cache | Load Time | Inference | Status |
+|-------|-----|-------|-----------|-----------|--------|
+| WAN T2V 1.3B | `wan-t2v-1.3b` | SSD (27GB) | ~8 min cold | ~11 min | PASS |
+| WAN T2V 14B | `wan-t2v-14b` | HDD (118GB) | ~11 min* | ~30 min est. | Works, slow load |
+| WAN I2V 14B | `wan-i2v-14b` | HDD (118GB) | ~11 min* | ~15 min est. | Works, slow load |
+
+*With HDD readahead tuning applied (was ~14 min before).
+
+### API Limits (enforced by validators)
+- `num_frames`: max 81 = ~5s video at 16fps
+- `num_inference_steps`: max 50 for WAN 1.3B
+- Resolutions: `480p` (848x480), `720p` (1280x720), `540p` (544x960)
 
 ---
 
-## SUPPORT COMMANDS
+## SMOKE TEST RESULTS (2026-04-11)
 
-```powershell
-# Get server IP (changes on VM restart)
-gcloud compute instances describe flux-a100-preemptible --zone=us-central1-a --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
+| Phase | Test | Result | Notes |
+|-------|------|--------|-------|
+| 1 | System Health | PASS | A100 healthy |
+| 2 | Python/CUDA Diagnostics | PASS | Flash SDP enabled, TF32 on |
+| 3 | FLUX 1-dev 1024x1024/28 steps | PASS | 46s |
+| 4 | WAN T2V 14B 480p/49fr/50 steps | TIMEOUT | Script limit 1800s too short; job completed after |
+| 5 | WAN T2V 1.3B 720p/81fr/50 steps | TIMEOUT | Script limit 600s too short |
+| 6 | WAN I2V 14B 480p/33fr/30 steps | TIMEOUT | Script limit 900s too short |
+| 7 | Final VRAM | — | 2342 MiB used |
 
-# Check server logs
-gcloud compute ssh flux-a100-preemptible --zone=us-central1-a --command="docker compose logs --tail=200"
+All 3 video TIMEOUTs are script timeout issues, NOT model failures. Jobs completed after script exited.
 
-# Restart server
-gcloud compute ssh flux-a100-preemptible --zone=us-central1-a --command="cd /opt/flux-server && sudo docker compose restart"
+### Quality Test — WAN T2V 1.3B (2026-04-11)
 
-# List all jobs on server
-Invoke-RestMethod "http://SERVER_IP:8080/api/jobs?limit=50"
+Isolated test: 720p, 81 frames, 50 steps, guidance=7.5
 
-# Cancel a stuck job
-Invoke-RestMethod "http://SERVER_IP:8080/api/jobs/{job_id}" -Method DELETE
+- Result: PASS
+- Inference time: 676s (~11 min)
+- Output: 2.9MB MP4, H.264, ~5 seconds at 720p
+- Quality: Acceptable (reviewed by user)
+
+---
+
+## PERFORMANCE TUNING APPLIED
+
+### HDD Readahead Tuning
+```bash
+sudo blockdev --setra 65536 /dev/sdb   # 128KB -> 32MB
+```
+- Before: ~71s/shard for WAN 14B (12 shards = ~14 min total)
+- After: ~55s/shard = ~11 min total (22% faster)
+- WARNING: Not persistent across reboots. Re-apply after each VM start.
+
+To make permanent:
+```bash
+echo 'ACTION=="add", KERNEL=="sdb", RUN+="/sbin/blockdev --setra 65536 /dev/sdb"' \
+  | sudo tee /etc/udev/rules.d/60-hdd-readahead.rules
 ```
 
 ---
 
-**Last Updated**: April 3, 2026, 19:30 UTC  
-**Session**: Deployment, Configuration, Initial Testing  
-**Status**: 🟢 Server Online & Healthy, Ready for Model Testing  
-**Next**: Complete model validation and fix FLUX memory issue
+## DISK LAYOUT
+
+| Disk | Mount | Size | Contents |
+|------|-------|------|----------|
+| SSD (sda) | / | 250GB | OS + Docker + SSD model cache |
+| HDD (sdb) | /mnt/hf-cache-disk | 500GB | WAN 14B models |
+
+SSD model cache (/app/model_cache):
+- FLUX.1-dev: ~32GB
+- WAN T2V 1.3B: ~27GB
+- HunyuanVideo: ~20GB
+
+HDD model cache (/mnt/hf-cache):
+- WAN T2V 14B: ~118GB
+- WAN I2V 14B: ~118GB
+
+---
+
+## NEXT STEPS (Priority Order)
+
+1. Make HDD readahead persistent (udev rule above)
+2. Add job cancel endpoint: DELETE /api/jobs/{job_id}
+3. Raise API frame/step limits for higher quality testing
+4. Update smoke_final.sh video timeouts (14B: 4500s, 1.3B: 2400s, I2V: 4500s)
+5. Test WAN T2V 14B quality at 480p/49fr/50 steps (isolated, no queue)
+
+---
+
+## REMOVED FROM THIS PROJECT
+
+- Music generation (AudioLDM2, MusicGen, ACE-Step, Stable Audio)
+- Animation generation (EchoMimic, LiveAvatar)
+- LTX Video
+- HunyuanVideo (on SSD but not validated this session)
+
+---
+
+## KEY COMMANDS
+
+```bash
+# Start VM
+gcloud compute instances start flux-a100-preemptible --zone=us-central1-a
+
+# Get current IP (changes on each start)
+gcloud compute instances describe flux-a100-preemptible --zone=us-central1-a \
+  --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
+
+# SSH
+gcloud compute ssh flux-a100-preemptible --zone=us-central1-a
+
+# Re-apply readahead after VM start (do this every time)
+sudo blockdev --setra 65536 /dev/sdb
+
+# Check health
+curl -s http://SERVER_IP:8080/health
+
+# Submit WAN 1.3B job (max quality)
+curl -s -X POST http://SERVER_IP:8080/api/video/generate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"prompt":"...","model_name":"wan-t2v-1.3b","resolution":"720p","num_frames":81,"fps":16,"guidance_scale":7.5,"num_inference_steps":50}'
+
+# Download output video from VM
+gcloud compute ssh flux-a100-preemptible --zone=us-central1-a \
+  --command="sudo cp /var/lib/docker/volumes/flux-server_outputs/_data/video/JOB_ID.mp4 /tmp/out.mp4 && sudo chmod 644 /tmp/out.mp4"
+gcloud compute scp flux-a100-preemptible:/tmp/out.mp4 ./output.mp4 --zone=us-central1-a
+```
