@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     model_id: str = "black-forest-labs/FLUX.1-dev"
 
     # Cache directories — split by disk tier for speed.
-    # High-priority models (FLUX, WAN 14B, HunyuanVideo) go on SSD (/app/model_cache).
-    # Low-priority models (WAN 1.3B, I2V 14B, LTX) fall back to HDD (/mnt/hf-cache).
+    # High-priority models (FLUX, WAN 1.3B, HunyuanVideo) go on SSD (/app/model_cache).
+    # Low-priority models (WAN 14B, I2V 14B, LTX) fall back to HDD (/mnt/hf-cache).
     # Set cache_dir_ssd=/mnt/hf-cache to disable split caching (single disk).
     cache_dir: str = "/mnt/hf-cache"        # default / HDD fallback
     cache_dir_ssd: str = "/app/model_cache" # SSD — fast-path for priority models

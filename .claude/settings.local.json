@@ -1,7 +1,19 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gcloud compute:*)"
+      "Bash(gcloud compute instances list:*)",
+      "Bash(gcloud compute instances describe:*)",
+      "Bash(gcloud compute instances start:*)",
+      "Bash(gcloud compute instances create:*)",
+      "Bash(gcloud compute instances add-resource-policies:*)",
+      "Bash(gcloud compute ssh:*)",
+      "Bash(gcloud compute scp:*)",
+      "Bash(gcloud compute firewall-rules create:*)",
+      "Bash(gcloud compute disks create:*)",
+      "Bash(gcloud compute resource-policies create:*)",
+      "Bash(wc -l ./flux-server/app/*.py ./flux-server/app/pipelines/*.py)",
+      "Bash(grep -r \"INSTANCE_NAME\\\\|ZONE\\\\|flux-a100\\\\|flux-server\" flux-server/deploy/gcp/*.ps1)",
+      "Bash(git add:*)"
     ]
   }
 }
