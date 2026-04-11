@@ -45,18 +45,13 @@ class Settings(BaseSettings):
     max_queue_size: int = 50
     max_jobs_per_user: int = 5
 
-    # Feature flags — enable/disable modalities
+    # Feature flags
     enable_video: bool = True
-    enable_music: bool = True
-    enable_animation: bool = True
 
     # Video defaults
     wan_default_variant: str = "14b"   # "1.3b" or "14b"
     default_video_fps: int = 16
     default_video_frames: int = 33
-
-    # Music defaults
-    default_music_duration: int = 30  # seconds
 
     class Config:
         env_file = ".env"

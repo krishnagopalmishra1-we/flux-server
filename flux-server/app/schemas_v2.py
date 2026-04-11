@@ -1,8 +1,7 @@
 """
-Request/Response schemas for all generation modalities.
+Request/Response schemas for image and video generation.
 
-Extends the original image schemas with video, music, animation,
-and job status schemas. All schemas use Pydantic v2 for validation.
+All schemas use Pydantic v2 for validation.
 """
 
 from pydantic import BaseModel, Field, field_validator
@@ -40,71 +39,6 @@ class VideoGenerateRequest(BaseModel):
 
 class VideoGenerateResponse(BaseModel):
     """Response body for video generation."""
-    job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    status: str = "queued"
-    video_url: Optional[str] = None
-    thumbnail_b64: Optional[str] = None
-    duration_seconds: float = 0.0
-    inference_time_ms: float = 0.0
-    queue_position: int = 0
-
-
-# ═══════════════════════════════════════════════════
-#  MUSIC SCHEMAS
-# ═══════════════════════════════════════════════════
-
-
-class MusicGenerateRequest(BaseModel):
-    """Request body for music/song generation."""
-    prompt: str = Field(..., min_length=1, max_length=2000)
-    model_name: str = Field("audioldm2")
-    duration_seconds: int = Field(30, ge=5, le=300)
-    # ACE-Step specific: lyrics for vocal generation
-    lyrics: Optional[str] = Field(None, max_length=5000)
-    genre: Optional[str] = Field(None, max_length=200)
-    bpm: Optional[int] = Field(None, ge=40, le=240)
-    # MusicGen specific: base64 melody audio for conditioning
-    melody_audio_b64: Optional[str] = None
-    seed: Optional[int] = None
-
-    @field_validator("prompt")
-    @classmethod
-    def sanitize_prompt(cls, v: str) -> str:
-        return "".join(c for c in v if c.isprintable())
-
-
-class MusicGenerateResponse(BaseModel):
-    """Response body for music generation."""
-    job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    status: str = "queued"
-    audio_url: Optional[str] = None
-    audio_b64: Optional[str] = None  # For short clips, can return inline
-    duration_seconds: float = 0.0
-    sample_rate: int = 0
-    inference_time_ms: float = 0.0
-    queue_position: int = 0
-
-
-# ═══════════════════════════════════════════════════
-#  ANIMATION SCHEMAS
-# ═══════════════════════════════════════════════════
-
-
-class AnimationGenerateRequest(BaseModel):
-    """Request body for audio-driven animation."""
-    model_name: str = Field("echomimic")
-    # Source face image (base64 PNG/JPG)
-    source_image_b64: str = Field(..., min_length=1)
-    # Driving audio (base64 WAV/MP3)
-    audio_b64: str = Field(..., min_length=1)
-    expression_scale: float = Field(1.0, ge=0.1, le=3.0)
-    pose_style: int = Field(0, ge=0, le=46)
-    # Whether to apply face enhancement to the output
-    use_enhancer: bool = False
-
-
-class AnimationGenerateResponse(BaseModel):
-    """Response body for animation generation."""
     job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     status: str = "queued"
     video_url: Optional[str] = None

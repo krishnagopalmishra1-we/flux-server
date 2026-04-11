@@ -1,6 +1,5 @@
 """
-Universal Model Manager for multi-modal AI generation.
-Supports IMAGE, VIDEO, MUSIC, and ANIMATION pipelines.
+Universal Model Manager for image and video generation.
 Handles lazy-loading, VRAM management, and model switching on a single GPU.
 """
 
@@ -35,15 +34,12 @@ class ModelCategory(str, Enum):
     """Categories of AI generation models."""
     IMAGE = "image"
     VIDEO = "video"
-    MUSIC = "music"
-    ANIMATION = "animation"
 
 
 class OutputType(str, Enum):
     """Output types for generation results."""
     IMAGE_B64 = "image_b64"       # Base64-encoded PNG
     VIDEO_FILE = "video_file"     # MP4 file path
-    AUDIO_FILE = "audio_file"     # WAV/MP3 file path
 
 
 class ModelConfig:
@@ -239,83 +235,6 @@ class MultiModelManager:
             default_guidance_scale=6.0,
         ),
 
-        # ═══════════════════════════════════════════════
-        #  MUSIC MODELS (Song + Instrumental + SFX)
-        # ═══════════════════════════════════════════════
-        "ace-step": ModelConfig(
-            model_id="ACE-Step/ACE-Step-v1-3.5B",
-            pipeline_class=None,
-            category=ModelCategory.MUSIC,
-            output_type=OutputType.AUDIO_FILE,
-            pipeline_module="app.pipelines.music_pipeline",
-            quantize=False,
-            vram_free_gb=4.0,
-            description="ACE-Step 1.5: Full songs with vocals and lyrics, Suno-like",
-            min_steps=1,
-            max_steps=100,
-            default_steps=60,
-            default_guidance_scale=5.0,
-        ),
-        "audioldm2": ModelConfig(
-            model_id="cvssp/audioldm2",
-            pipeline_class=None,
-            category=ModelCategory.MUSIC,
-            output_type=OutputType.AUDIO_FILE,
-            pipeline_module="app.pipelines.music_pipeline",
-            quantize=False,
-            vram_free_gb=5.0,
-            description="AudioLDM 2: SOTA Audio and Instrumental Music Generation",
-            min_steps=50,
-            max_steps=200,
-            default_steps=100,
-            default_guidance_scale=3.5,
-        ),
-        "stable-audio": ModelConfig(
-            model_id="stabilityai/stable-audio-open-1.0",
-            pipeline_class=None,
-            category=ModelCategory.MUSIC,
-            output_type=OutputType.AUDIO_FILE,
-            pipeline_module="app.pipelines.music_pipeline",
-            quantize=False,
-            vram_free_gb=5.0,
-            description="Stable Audio Open: Sound effects, loops, production elements",
-            min_steps=50,
-            max_steps=200,
-            default_steps=100,
-            default_guidance_scale=7.0,
-        ),
-
-        # ═══════════════════════════════════════════════
-        #  ANIMATION MODELS (Audio-to-Talking-Head)
-        # ═══════════════════════════════════════════════
-        "liveportrait": ModelConfig(
-            model_id="KwaiVGI/LivePortrait",
-            pipeline_class=None,
-            category=ModelCategory.ANIMATION,
-            output_type=OutputType.VIDEO_FILE,
-            pipeline_module="app.pipelines.animation_pipeline",
-            quantize=False,
-            vram_free_gb=6.0,
-            description="LivePortrait: Fast, controllable portrait animation",
-            min_steps=1,
-            max_steps=1,
-            default_steps=1,
-            default_guidance_scale=1.0,
-        ),
-        "echomimic": ModelConfig(
-            model_id="BadToBest/EchoMimic",
-            pipeline_class=None,
-            category=ModelCategory.ANIMATION,
-            output_type=OutputType.VIDEO_FILE,
-            pipeline_module="app.pipelines.animation_pipeline",
-            quantize=False,
-            vram_free_gb=12.0,
-            description="EchoMimic: SOTA audio-driven talking head animation",
-            min_steps=1,
-            max_steps=1,
-            default_steps=1,
-            default_guidance_scale=1.0,
-        ),
     }
     
     def __init__(self, default_model: str = "flux-1-dev"):

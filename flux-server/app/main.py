@@ -11,8 +11,6 @@ import hashlib
 from app.schemas import GenerateRequest, GenerateResponse, HealthResponse
 from app.schemas_v2 import (
     VideoGenerateRequest, VideoGenerateResponse,
-    MusicGenerateRequest, MusicGenerateResponse,
-    AnimationGenerateRequest, AnimationGenerateResponse,
     JobStatusResponse, QueueStatusResponse,
 )
 from app.security import verify_api_key, check_rate_limit
@@ -21,8 +19,6 @@ from app.model_manager import ModelCategory
 from app.job_queue import job_queue, JobPriority, JobStatus
 from app.output_store import output_store
 from app.pipelines.video_pipeline import video_pipeline
-from app.pipelines.music_pipeline import music_pipeline
-from app.pipelines.animation_pipeline import animation_pipeline
 from app.dataset_plan import get_dataset_plan, available_domains
 from app.training_presets import get_lora_preset
 from app.config import get_settings
@@ -129,39 +125,6 @@ def _run_sync(coro_fn, **kwargs):
         loop.close()
 
 
-async def _handle_music_job(job) -> dict:
-    """Process a music generation job."""
-    flux_pipeline.model_manager.unload_all()
-    payload = job.payload
-
-    return await music_pipeline.generate_song(
-        prompt=payload["prompt"],
-        model_name=job.model_name,
-        duration_seconds=payload.get("duration_seconds", 30),
-        lyrics=payload.get("lyrics"),
-        genre=payload.get("genre"),
-        bpm=payload.get("bpm"),
-        seed=payload.get("seed"),
-        job_id=job.id,
-    )
-
-
-async def _handle_animation_job(job) -> dict:
-    """Process an animation generation job."""
-    flux_pipeline.model_manager.unload_all()
-    payload = job.payload
-
-    return await animation_pipeline.generate_talking_head(
-        source_image_b64=payload["source_image_b64"],
-        audio_b64=payload["audio_b64"],
-        model_name=job.model_name,
-        expression_scale=payload.get("expression_scale", 1.0),
-        pose_style=payload.get("pose_style", 0),
-        use_enhancer=payload.get("use_enhancer", False),
-        job_id=job.id,
-    )
-
-
 # Lock that serialises GPU-heavy operations so image generation,
 # video pre-loading, and queued jobs never fight for VRAM at the same time.
 _gpu_lock = asyncio.Lock()
@@ -182,18 +145,15 @@ async def lifespan(app: FastAPI):
 
     # Register job handlers for async generation
     job_queue.register_handler("video", _handle_video_job)
-    job_queue.register_handler("music", _handle_music_job)
-    job_queue.register_handler("animation", _handle_animation_job)
 
-    # Share the GPU lock with the job queue so video/music/animation jobs
+    # Share the GPU lock with the job queue so video jobs
     # cannot run concurrently with image generation endpoints.
     job_queue.gpu_lock = _gpu_lock
 
     # Create output directories
     settings = get_settings()
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
-    for subdir in ["video", "audio", "animation"]:
-        (Path(settings.output_dir) / subdir).mkdir(exist_ok=True)
+    Path(settings.output_dir).joinpath("video").mkdir(exist_ok=True)
 
     # Keep startup fast and responsive; launch background model pre-loading
     # while server immediately becomes ready to accept requests.
@@ -209,16 +169,11 @@ async def lifespan(app: FastAPI):
         pass
     flux_pipeline.model_manager.unload_all()
     video_pipeline.unload()
-    music_pipeline.unload()
-    animation_pipeline.unload()
 
 
 app = FastAPI(
     title="Neural Creation Studio API",
-    description=(
-        "Multi-modal AI generation platform: Image, Video, Music, and Animation. "
-        "Powered by FLUX, Wan 2.2, ACE-Step, AudioLDM2, EchoMimic, and more."
-    ),
+    description="AI generation platform: Image and Video. Powered by FLUX and Wan 2.2.",
     version="3.0.0",
     lifespan=lifespan,
 )
@@ -319,10 +274,8 @@ async def training_preset(style: str):
 
 def _run_image_generation(req: GenerateRequest) -> tuple[str, int, float]:
     """Run image inference in a worker thread (CPU-bound / GPU-bound)."""
-    # Unload any video/music/animation model to free VRAM for image model.
+    # Unload any video model to free VRAM for image model.
     video_pipeline.unload()
-    music_pipeline.unload()
-    animation_pipeline.unload()
 
     return flux_pipeline.generate(
         prompt=req.prompt,
@@ -420,72 +373,6 @@ async def generate_video(req: VideoGenerateRequest, request: Request):
 
     position = job_queue.get_queue_position(job.id)
     return VideoGenerateResponse(
-        job_id=job.id,
-        status=job.status.value,
-        queue_position=position,
-    )
-
-
-# ═══════════════════════════════════════════════════
-#  MUSIC GENERATION ENDPOINTS
-# ═══════════════════════════════════════════════════
-
-
-@app.post("/api/music/generate", response_model=MusicGenerateResponse)
-async def generate_music(req: MusicGenerateRequest, request: Request):
-    """Submit a music/song generation job."""
-    settings = get_settings()
-    if not settings.enable_music:
-        raise HTTPException(status_code=503, detail="Music generation is disabled.")
-
-    check_rate_limit(request, "")
-
-    try:
-        job = await job_queue.submit(
-            job_type="music",
-            model_name=req.model_name,
-            payload=req.model_dump(),
-            priority=JobPriority.FAST,
-            user_id=get_user_id(request),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=429, detail=str(e))
-
-    position = job_queue.get_queue_position(job.id)
-    return MusicGenerateResponse(
-        job_id=job.id,
-        status=job.status.value,
-        queue_position=position,
-    )
-
-
-# ═══════════════════════════════════════════════════
-#  ANIMATION GENERATION ENDPOINTS
-# ═══════════════════════════════════════════════════
-
-
-@app.post("/api/animation/generate", response_model=AnimationGenerateResponse)
-async def generate_animation(req: AnimationGenerateRequest, request: Request):
-    """Submit an animation generation job (audio-driven talking head)."""
-    settings = get_settings()
-    if not settings.enable_animation:
-        raise HTTPException(status_code=503, detail="Animation generation is disabled.")
-
-    check_rate_limit(request, "")
-
-    try:
-        job = await job_queue.submit(
-            job_type="animation",
-            model_name=req.model_name,
-            payload=req.model_dump(),
-            priority=JobPriority.NORMAL,
-            user_id=get_user_id(request),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=429, detail=str(e))
-
-    position = job_queue.get_queue_position(job.id)
-    return AnimationGenerateResponse(
         job_id=job.id,
         status=job.status.value,
         queue_position=position,
@@ -660,8 +547,7 @@ try:
     _settings = get_settings()
     _output_path = Path(_settings.output_dir)
     _output_path.mkdir(parents=True, exist_ok=True)
-    for _sub in ["video", "audio", "animation"]:
-        (_output_path / _sub).mkdir(exist_ok=True)
+    (_output_path / "video").mkdir(exist_ok=True)
     app.mount("/outputs", StaticFiles(directory=str(_output_path)), name="outputs")
 except Exception as _e:
     logger.warning(f"Could not mount output directory: {_e}. Will be created at startup.")

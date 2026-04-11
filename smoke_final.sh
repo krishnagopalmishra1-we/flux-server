@@ -170,21 +170,8 @@ else
   poll_job "$JOB" "WAN I2V 14B" 900
 fi
 
-# ── PHASE 7: Music — ACE-Step, 60s ───────────────────────────────────────────
-log "=== PHASE 7: MUSIC — ACE-Step (60s) ==="
-RESP=$(curl -sf -X POST "$BASE/api/music/generate" -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{"prompt":"Epic cinematic orchestral score, Hollywood blockbuster, swelling strings, dramatic percussion","model_name":"ace-step","duration_seconds":60}' 2>/dev/null || true)
-JOB=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)
-if [ -z "$JOB" ]; then
-  warn "Music: submit failed — $RESP"
-else
-  pass "Music: submitted ($JOB)"
-  poll_job "$JOB" "ACE-Step music" 900
-fi
-
-# ── PHASE 8: Final VRAM state ─────────────────────────────────────────────────
-log "=== PHASE 8: FINAL VRAM STATE ==="
+# ── PHASE 7: Final VRAM state ─────────────────────────────────────────────────
+log "=== PHASE 7: FINAL VRAM STATE ==="
 nvidia-smi --query-gpu=name,memory.used,memory.free,utilization.gpu,temperature.gpu --format=csv,noheader
 
 log "================================================================="
