@@ -182,9 +182,11 @@ class MultiModelManager:
             output_type=OutputType.VIDEO_FILE,
             pipeline_module="app.pipelines.video_pipeline",
             quantize=True,
-            quantize_type="fp8",
-            vram_free_gb=35.0,
-            description="Wan 2.2 T2V 14B: SOTA cinematic video, maximum quality",
+            quantize_type="nf4",
+            # Dual-transformer NF4: ~7 GB each + UMT5 text encoder ~10.5 GB + VAE ~1 GB = ~25.5 GB
+            # Peak during load (one shard in BF16 at a time): ~30 GB. Need 30 GB free to start.
+            vram_free_gb=30.0,
+            description="Wan 2.2 T2V 14B: SOTA cinematic video, maximum quality (NF4, ~25.5 GB)",
             min_steps=20,
             max_steps=50,
             default_steps=30,
@@ -197,9 +199,10 @@ class MultiModelManager:
             output_type=OutputType.VIDEO_FILE,
             pipeline_module="app.pipelines.video_pipeline",
             quantize=True,
-            quantize_type="fp8",
+            quantize_type="nf4",
+            # Same dual-transformer architecture as T2V 14B — same VRAM profile.
             vram_free_gb=30.0,
-            description="Wan 2.2 I2V 14B: Image-to-video animation, 480P",
+            description="Wan 2.2 I2V 14B: image-to-video animation, NF4, ~25.5 GB VRAM",
             min_steps=20,
             max_steps=50,
             default_steps=30,
@@ -214,8 +217,10 @@ class MultiModelManager:
             pipeline_module="app.pipelines.video_pipeline",
             quantize=True,
             quantize_type="nf4",
-            vram_free_gb=36.0,
-            description="HunyuanVideo: SOTA 720p text-to-video, NF4 quantized transformer",
+            # NF4 transformer ~8 GB + VAE ~1 GB = ~9 GB GPU (LLaMA text encoder
+            # kept on CPU via enable_model_cpu_offload — moves to GPU only for text encoding).
+            vram_free_gb=10.0,
+            description="HunyuanVideo: 720p text-to-video, NF4 transformer, ~13 GB VRAM",
             min_steps=20,
             max_steps=100,
             default_steps=50,
@@ -341,8 +346,17 @@ class MultiModelManager:
                 self._unload_model(old_model)
 
         gpu_info = self.gpu_info()
-        logger.info(f"Loading {model_name} (needs ~{config.vram_free_gb}GB)...")
+        logger.info(f"Loading {model_name} (needs ~{config.vram_free_gb}GB free)...")
         logger.info(f"GPU: {gpu_info['name']} | Free: {gpu_info['free_gb']:.1f}GB / {gpu_info['total_gb']:.1f}GB")
+
+        # Pre-load VRAM check — fail fast before committing to a long load that will OOM.
+        if gpu_info['total_gb'] > 0 and gpu_info['free_gb'] < config.vram_free_gb:
+            raise RuntimeError(
+                f"Insufficient VRAM to load {model_name}: "
+                f"need {config.vram_free_gb:.1f}GB free, "
+                f"only {gpu_info['free_gb']:.1f}GB available. "
+                f"Call unload_all() first or reduce concurrent model usage."
+            )
 
         cache_dir = self.get_cache_dir(model_name)
 
@@ -441,8 +455,8 @@ class MultiModelManager:
             self.current_model = model_name
 
             gpu_info = self.gpu_info()
-            logger.info(f"✅ {model_name} loaded successfully")
-            logger.info(f"GPU: Used: {gpu_info['used_gb']:.1f}GB / {gpu_info['total_gb']:.1f}GB")
+            vram_used = gpu_info['total_gb'] - gpu_info['free_gb']
+            logger.info(f"✅ {model_name} loaded. Actual VRAM: {vram_used:.1f}GB used / {gpu_info['total_gb']:.1f}GB total ({gpu_info['free_gb']:.1f}GB free)")
             
         except Exception as e:
             logger.exception(f"Failed to load {model_name}: {e}")

@@ -363,12 +363,12 @@ class VideoPipeline:
         self._pipe = HunyuanVideoPipeline.from_pretrained(
             model_id, transformer=transformer, **load_kwargs
         )
-        for name, component in self._pipe.components.items():
-            if name != "transformer" and hasattr(component, "to"):
-                component.to(self.device)
-        logger.info("  All non-transformer components on GPU")
+        # LLaMA-3-8B text encoder is ~16 GB BF16 — keeping it on GPU would push total
+        # to ~25 GB. Use enable_model_cpu_offload() so it lives on CPU and moves to GPU
+        # only for the text-encoding step (once per job). GPU steady state: ~9 GB.
+        self._pipe.enable_model_cpu_offload()
         self._apply_memory_opts()
-        logger.info("✅ HunyuanVideo loaded")
+        logger.info("  HunyuanVideo: model_cpu_offload enabled (~9 GB GPU steady state)")
 
     # ──────────────────────────────────────────────
     #  LoRA Support
