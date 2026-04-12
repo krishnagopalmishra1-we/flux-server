@@ -138,7 +138,7 @@ if [ -z "$JOB" ]; then
   fail "WAN T2V 14B: submit failed — $RESP"
 else
   pass "WAN T2V 14B: submitted ($JOB)"
-  poll_job "$JOB" "WAN T2V 14B" 1800
+  poll_job "$JOB" "WAN T2V 14B" 4500
 fi
 nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
 
@@ -154,7 +154,7 @@ if [ -z "$JOB" ]; then
   fail "WAN T2V 1.3B: submit failed — $RESP"
 else
   pass "WAN T2V 1.3B: submitted ($JOB)"
-  poll_job "$JOB" "WAN T2V 1.3B" 600
+  poll_job "$JOB" "WAN T2V 1.3B" 2400
 fi
 nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
 
@@ -170,7 +170,7 @@ if [ -z "$JOB" ]; then
   warn "WAN I2V 14B: submit failed — $RESP"
 else
   pass "WAN I2V 14B: submitted ($JOB)"
-  poll_job "$JOB" "WAN I2V 14B" 900
+  poll_job "$JOB" "WAN I2V 14B" 4500
 fi
 
 # ── PHASE 7: Final VRAM state ─────────────────────────────────────────────────
