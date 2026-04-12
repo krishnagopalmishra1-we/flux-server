@@ -1,6 +1,6 @@
 # NEURAL CREATION STUDIO — IMPLEMENTATION PLAN
 # Target: 1–2 Minute Video in ≤30 Minutes Without Quality Loss
-# Last Updated: 2026-04-12
+# Last Updated: 2026-04-12 (Post-Smoke-Test)
 # Legend: DONE | IN PROGRESS | PENDING | BLOCKED (needs infra)
 
 ---
@@ -51,8 +51,8 @@
 |---|--------|--------|-------|
 | 3.1 | video_pipeline.py: generate_long_video() with sliding window + cosine blend | DONE | commit f887a52 |
 | 3.2 | main.py: auto-route num_frames>81 to generate_long_video() | DONE | commit f887a52 |
-| 3.3 | Test 240-frame (15s) chunked generation end-to-end | PENDING | Needs VM running + code deployed |
-| 3.4 | Test 960-frame (60s) chunked generation | PENDING | After 3.3 passes |
+| 3.3 | Test 240-frame (15s) chunked generation end-to-end | DONE | Verified with WAN 1.3B (~42 min) |
+| 3.4 | Test 960-frame (60s) chunked generation | PENDING | VM stopped; planned for next session |
 
 ---
 
@@ -84,9 +84,19 @@
 | D2 | git pull + docker compose up --build on VM | DONE | Deployed 2026-04-12 |
 | D2.5 | Fix NF4 pipe.to('cuda') crash (FLUX + SD3.5) | DONE | commit b4a6f71, redeployed |
 | D2.6 | Fix video OOM: unload FLUX before video job starts | DONE | commit 91736f2 — needs redeploy |
-| D3 | Re-run smoke test after deploy | IN PROGRESS | Ph1-3 PASS, Ph4 OOM (fixed), Ph5 running |
-| D3.5 | Isolated re-test: WAN T2V 14B + WAN I2V 14B | PENDING | After D3 + redeploy fix |
-| D4 | Test chunked 240-frame generation | PENDING | After D3.5 |
+| D3 | Re-run smoke test after deploy | DONE | Ph1-3 PASS, Ph4 OOM (fixed), Ph5 PASS |
+| D3.5 | Isolated re-test: WAN T2V 14B + WAN I2V 14B | DONE | T2V 49fr / I2V 33fr PASS (A100) |
+| D4 | Test chunked 240-frame generation | DONE | Passed with 1.3B (default behavior) |
+
+---
+
+## SMOKE TEST FINDINGS (2026-04-12)
+
+- **WAN 14B HQ (T2V)**: 49 frames. Total 2395s (40 min). Inference: 493s (8.2 min).
+- **WAN 14B HQ (I2V)**: 33 frames. Total 1283s (21 min). Inference: 187s (3.1 min).
+- **Chunked 240fr**: 1.3B model. Total 2551s (42.5 min). 
+- **Discovery**: `generate_long_video` defaults to `1.3b`. If `14b` is intended for long videos, it must be explicitly set in the API request.
+- **Hunyuan DL**: ~65GB in SSD cache volume. DONE.
 
 ---
 
@@ -112,6 +122,9 @@ When NVMe is provisioned:
 | WAN 1.3B | 5 sec / 81fr | 8min cold / instant warm | same | ~11 min | 11 min warm | 11 min |
 | WAN 1.3B | 60 sec / chunked | instant warm | same | ~22 min | 22 min | 22 min |
 | WAN 1.3B | 120 sec / chunked | instant warm | same | ~44 min | 44 min | 44 min |
-| WAN T2V 14B | 5 sec / 49fr | 11 min | 2 min | ~7 min | 18 min | 9 min |
-| WAN T2V 14B | 60 sec / chunked | 11min cold | 2min cold | ~35 min | 46 min | 37 min |
-| WAN I2V 14B | 5 sec / 33fr | 11 min | 2 min | ~15 min | 26 min | 17 min |
+| WAN T2V 14B | 5 sec / 49fr | 30 min | 2 min | ~8 min | 40 min | 10 min |
+| WAN T2V 14B | 60 sec / chunked | 30 min | 2 min | ~35 min | 65 min | 37 min |
+| WAN I2V 14B | 5 sec / 33fr | 18 min | 2 min | ~3 min | 21 min | 5 min |
+| WAN 1.3B | 15 sec / 240fr | ~2 min | ~2 min | ~40 min | 42 min | 42 min |
+
+*Actual observed load times on HDD are significantly higher than initial estimates (18-30 mins vs 11 mins).*
