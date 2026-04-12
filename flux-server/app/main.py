@@ -51,6 +51,11 @@ async def _handle_video_job(job) -> dict:
     import functools
     payload = job.payload
 
+    # Unload image model before loading video model — mirrors _run_image_generation
+    # which calls video_pipeline.unload() before loading FLUX. Without this, both
+    # models can be in VRAM simultaneously (FLUX ~17 GB + WAN 14B ~22 GB = OOM on A100 40 GB).
+    flux_pipeline.model_manager.unload_all()
+
     # Check disk space before starting generation
     output_store.check_disk_space(min_gb=10.0)
 
