@@ -83,8 +83,10 @@
 | D1 | Make readahead persistent (udev rule /dev/sdb) | DONE | Applied 2026-04-11 |
 | D2 | git pull + docker compose up --build on VM | DONE | Deployed 2026-04-12 |
 | D2.5 | Fix NF4 pipe.to('cuda') crash (FLUX + SD3.5) | DONE | commit b4a6f71, redeployed |
-| D3 | Re-run smoke test after deploy | IN PROGRESS | Running — Ph1/2/3 PASS, Ph4 loading |
-| D4 | Test chunked 240-frame generation | PENDING | After D3 |
+| D2.6 | Fix video OOM: unload FLUX before video job starts | DONE | commit 91736f2 — needs redeploy |
+| D3 | Re-run smoke test after deploy | IN PROGRESS | Ph1-3 PASS, Ph4 OOM (fixed), Ph5 running |
+| D3.5 | Isolated re-test: WAN T2V 14B + WAN I2V 14B | PENDING | After D3 + redeploy fix |
+| D4 | Test chunked 240-frame generation | PENDING | After D3.5 |
 
 ---
 
