@@ -232,7 +232,9 @@ class VideoPipeline:
 
         if quantize:
             # NF4 double-quantization: ~7-8 GB vs ~28 GB BF16 — required for 14B on A100 40GB.
-            # All non-transformer components go to GPU in BF16 for full tensor-core speed.
+            # WAN 2.2 has TWO transformers (transformer + transformer_2), both must be NF4
+            # quantized. transformer_2 in BF16 = 54 GB → OOM on A100 40GB at shard 7/12.
+            # Both NF4 = ~16 GB total, leaving room for text encoder (~10.5 GB) + VAE (~1 GB).
             logger.info(f"  Loading {model_id} transformer with NF4 double-quantization...")
             nf4 = self._make_nf4_config()
             try:
@@ -246,9 +248,24 @@ class VideoPipeline:
                 **({"token": settings.hf_token} if settings.hf_token else {}),
             )
             logger.info("  Transformer: NF4 quantized (~7 GB)")
-            self._pipe = WanPipeline.from_pretrained(model_id, transformer=transformer, **load_kwargs)
+            # Load transformer_2 with NF4 if present (WAN 2.2 dual-transformer architecture).
+            transformer_2 = None
+            try:
+                transformer_2 = WanTransformer3DModel.from_pretrained(
+                    model_id, subfolder="transformer_2",
+                    quantization_config=nf4, torch_dtype=torch.bfloat16,
+                    cache_dir=cache_dir,
+                    **({"token": settings.hf_token} if settings.hf_token else {}),
+                )
+                logger.info("  Transformer_2: NF4 quantized (~7 GB)")
+            except Exception:
+                pass  # WAN 2.1 has no transformer_2
+            pipe_kwargs = {"transformer": transformer}
+            if transformer_2 is not None:
+                pipe_kwargs["transformer_2"] = transformer_2
+            self._pipe = WanPipeline.from_pretrained(model_id, **pipe_kwargs, **load_kwargs)
             for name, component in self._pipe.components.items():
-                if name != "transformer" and hasattr(component, "to"):
+                if name not in ("transformer", "transformer_2") and hasattr(component, "to"):
                     component.to(self.device)
             logger.info("  All non-transformer components on GPU")
         else:
@@ -271,6 +288,7 @@ class VideoPipeline:
             load_kwargs["token"] = settings.hf_token
 
         # NF4 double-quantization: same VRAM constraint as T2V 14B.
+        # WAN 2.2 I2V also has transformer_2 — must quantize both with NF4.
         logger.info(f"  Loading {model_id} transformer with NF4 double-quantization...")
         nf4 = self._make_nf4_config()
         try:
@@ -283,9 +301,24 @@ class VideoPipeline:
             cache_dir=cache_dir,
             **({"token": settings.hf_token} if settings.hf_token else {}),
         )
-        self._pipe = WanI2V.from_pretrained(model_id, transformer=transformer, **load_kwargs)
+        logger.info("  Transformer: NF4 quantized (~7 GB)")
+        transformer_2 = None
+        try:
+            transformer_2 = WanTransformer3DModel.from_pretrained(
+                model_id, subfolder="transformer_2",
+                quantization_config=nf4, torch_dtype=torch.bfloat16,
+                cache_dir=cache_dir,
+                **({"token": settings.hf_token} if settings.hf_token else {}),
+            )
+            logger.info("  Transformer_2: NF4 quantized (~7 GB)")
+        except Exception:
+            pass  # not all I2V versions have transformer_2
+        pipe_kwargs = {"transformer": transformer}
+        if transformer_2 is not None:
+            pipe_kwargs["transformer_2"] = transformer_2
+        self._pipe = WanI2V.from_pretrained(model_id, **pipe_kwargs, **load_kwargs)
         for name, component in self._pipe.components.items():
-            if name != "transformer" and hasattr(component, "to"):
+            if name not in ("transformer", "transformer_2") and hasattr(component, "to"):
                 component.to(self.device)
         logger.info("  I2V NF4 quantized, all non-transformer components on GPU")
         self._apply_memory_opts()
