@@ -2,7 +2,7 @@
 # Download HunyuanVideo to SSD model cache (/app/model_cache inside container).
 # ~40-50 GB download. Run inside container or with correct HF_HOME.
 # Usage: bash /opt/flux-server/download_hunyuan.sh
-set -uo pipefail
+set -euo pipefail
 
 MODEL_ID="hunyuanvideo-community/HunyuanVideo"
 CACHE_DIR="/app/model_cache"  # SSD volume — matches SSD_PRIORITY in model_manager.py

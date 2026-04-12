@@ -217,10 +217,11 @@ class MultiModelManager:
             pipeline_module="app.pipelines.video_pipeline",
             quantize=True,
             quantize_type="nf4",
-            # NF4 transformer ~8 GB + VAE ~1 GB = ~9 GB GPU (LLaMA text encoder
-            # kept on CPU via enable_model_cpu_offload — moves to GPU only for text encoding).
+            # NF4 transformer ~8 GB + VAE ~1 GB = ~9 GB GPU steady state.
+            # LLaMA-3-8B text encoder (~16 GB BF16) kept on CPU via enable_model_cpu_offload;
+            # moves to GPU only during the text-encoding step, then back to CPU.
             vram_free_gb=10.0,
-            description="HunyuanVideo: 720p text-to-video, NF4 transformer, ~13 GB VRAM",
+            description="HunyuanVideo: 720p text-to-video, NF4 transformer, ~9 GB VRAM (CPU-offload text encoder)",
             min_steps=20,
             max_steps=100,
             default_steps=50,
