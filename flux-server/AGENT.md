@@ -1,6 +1,6 @@
 # 🤖 AGENT.md — Neural Creation Studio
 
-> **Last Updated:** 2026-04-11
+> **Last Updated:** 2026-04-12
 > This file is the primary context document for any AI agent working on this codebase.
 
 ---
@@ -48,6 +48,24 @@ Job Queue (app/job_queue.py)
 - `ltx-video` — Removed (untested, broken pipeline)
 - `audioldm2`, `ace-step` — Removed (music feature deprecated)
 - `echomimic`, `liveportrait` — Removed (animation feature deprecated)
+
+---
+
+## 📊 Recent Test Results (2026-04-12)
+
+Smoke tests conducted on a **GCP A100 (40GB)** instance.
+
+| Test | Model | Params | Status | Duration |
+| :--- | :--- | :--- | :--- | :--- |
+| **WAN T2V HQ** | `wan-t2v-14b` | 720p/49fr/50st | **PASS** | 2395s (493s inf) |
+| **WAN I2V HQ** | `wan-i2v-14b` | 720p/33fr/50st | **PASS** | 1283s (187s inf) |
+| **Chunked 240**| `wan-t2v-1.3b`| 720p/240fr/50st| **PASS** | 2551s (~42 min) |
+| **Hunyuan DL** | `hunyuan-video`| Standard | **DONE** | ~65GB SSD cache |
+
+### Performance Discovered
+- **A100 VRAM**: Standby (1.3B) = 14.5 GB. Inference (14B NF4) = ~18-24 GB.
+- **Chunked Default**: `generate_long_video()` defaults to `1.3b` if `model_name` is omitted in the request.
+- **GCP DNS**: Transient `compute.googleapis.com` resolution errors encountered; retry logic recommended for automation.
 
 ---
 
@@ -119,10 +137,13 @@ flux-server/
 - [ ] Confirm all pipelines use `torch.bfloat16` (not `float16` which causes NaN)
 - [ ] Verify image jobs use `JobPriority.FAST` to bypass video queue
 
-### Smoke Test Timeouts (GCP VM only)
-- [ ] WAN T2V 14B: current 1800s → needs 4500s
-- [ ] WAN T2V 1.3B: current 600s → needs 2400s
-- [ ] WAN I2V 14B: current 900s → needs 4500s
+### Smoke Test Timeouts (GCP VM only) — CONFIRMED
+- [ ] WAN T2V 14B: 1800s is insufficient for HQ → use 4500s.
+- [ ] WAN T2V 1.3B: 600s is insufficient for chunked → use 2400s.
+- [ ] WAN I2V 14B: 900s is insufficient for HQ → use 4500s.
+
+### Known Issues
+- [ ] **Model Selection**: API endpoints default to `wan-t2v-1.3b` when `model_name` is unspecified, which can lead to unexpected model usage in long-video jobs. Needs schema-level default refinement.
 
 ---
 
