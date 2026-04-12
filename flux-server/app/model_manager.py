@@ -380,7 +380,12 @@ class MultiModelManager:
                 )
                 load_kwargs["transformer"] = transformer
                 pipe = FluxPipeline.from_pretrained(config.model_id, **load_kwargs)
-                pipe.to(self.device)
+                # NF4-quantized transformer is already on CUDA via bitsandbytes.
+                # pipe.to() is invalid on quantized pipelines — move non-quantized components only.
+                for attr in ("vae", "text_encoder", "text_encoder_2"):
+                    component = getattr(pipe, attr, None)
+                    if component is not None and hasattr(component, "to"):
+                        component.to(self.device)
             elif config.quantize and config.pipeline_class == StableDiffusion3Pipeline:
                 # SD3.5-Large NF4 path: quantize transformer while keeping pipeline API unchanged.
                 from diffusers import SD3Transformer2DModel
@@ -400,7 +405,12 @@ class MultiModelManager:
                 )
                 load_kwargs["transformer"] = transformer
                 pipe = StableDiffusion3Pipeline.from_pretrained(config.model_id, **load_kwargs)
-                pipe.to(self.device)
+                # NF4-quantized transformer is already on CUDA via bitsandbytes.
+                # pipe.to() is invalid on quantized pipelines — move non-quantized components only.
+                for attr in ("vae", "text_encoder", "text_encoder_2", "text_encoder_3"):
+                    component = getattr(pipe, attr, None)
+                    if component is not None and hasattr(component, "to"):
+                        component.to(self.device)
             else:
                 # Standard loading (no quantization)
                 logger.info(f"Loading {model_name} from {config.model_id}...")
