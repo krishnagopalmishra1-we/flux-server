@@ -72,7 +72,7 @@ if [ -z "$JOB" ]; then
   exit 1
 fi
 pass "Submitted job: $JOB"
-poll_job "$JOB" "WAN T2V 1.3B 720p/960fr/50steps" 9600
+poll_job "$JOB" "WAN T2V 1.3B 720p/960fr/50steps" 13200
 
 log "--- Final VRAM ---"
 nvidia-smi --query-gpu=name,memory.used,memory.free,utilization.gpu --format=csv,noheader
