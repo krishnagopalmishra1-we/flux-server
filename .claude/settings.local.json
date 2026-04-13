@@ -5,11 +5,15 @@
       "Bash(gcloud compute instances describe:*)",
       "Bash(gcloud compute instances start:*)",
       "Bash(gcloud compute instances create:*)",
+      "Bash(gcloud compute instances stop:*)",
+      "Bash(gcloud compute instances restart:*)",
+      "Bash(gcloud compute instances set-scheduling:*)",
       "Bash(gcloud compute instances add-resource-policies:*)",
       "Bash(gcloud compute ssh:*)",
       "Bash(gcloud compute scp:*)",
       "Bash(gcloud compute firewall-rules create:*)",
       "Bash(gcloud compute disks create:*)",
+      "Bash(gcloud compute disks list:*)",
       "Bash(gcloud compute resource-policies create:*)",
       "Bash(wc -l ./flux-server/app/*.py ./flux-server/app/pipelines/*.py)",
       "Bash(grep -r \"INSTANCE_NAME\\\\|ZONE\\\\|flux-a100\\\\|flux-server\" flux-server/deploy/gcp/*.ps1)",
@@ -17,14 +21,8 @@
       "Bash(ls *.md)",
       "Bash(ls flux-server/app/pipeline.py)",
       "Bash(ls smoke_test_full.sh smoke_test_v2.sh)",
-      "Bash(gcloud compute:*)",
-      "Bash(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no flux-server \"echo connected\")",
-      "Bash(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no krishnagopalmishra1-we@34.57.144.223 \"echo connected\")",
-      "Bash(curl -s --connect-timeout 10 http://34.67.241.234:8080/health)",
-      "Bash(curl -s http://34.67.241.234:8080/api/jobs)",
       "Bash(python3 -c \"import sys,json; jobs=json.load\\(sys.stdin\\); [print\\(j.get\\('job_id',''\\)[:12], j.get\\('status'\\), j.get\\('model_name'\\), j.get\\('progress',0\\)\\) for j in jobs]\")",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(type\\(d\\)\\); print\\(str\\(d\\)[:300]\\)\")",
-      "Bash(ssh -o StrictHostKeyChecking=no krishnagopalmishra1-we@34.67.241.234 \"echo connected && sudo docker ps --format '{{.Names}} {{.Status}}'\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(type\\(d\\)\\); print\\(str\\(d\\)[:300]\\)\")"
     ]
   }
 }

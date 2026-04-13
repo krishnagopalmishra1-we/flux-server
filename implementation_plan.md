@@ -1,6 +1,6 @@
 # NEURAL CREATION STUDIO — IMPLEMENTATION PLAN
 # Target: 1–2 Minute Video in ≤30 Minutes Without Quality Loss
-# Last Updated: 2026-04-12 (Post-Smoke-Test)
+# Last Updated: 2026-04-13 (Post-Abort)
 # Legend: DONE | IN PROGRESS | PENDING | BLOCKED (needs infra)
 
 ---
@@ -51,7 +51,7 @@
 |---|--------|--------|-------|
 | 3.1 | video_pipeline.py: generate_long_video() with sliding window | DONE | commit f887a52 |
 | 3.2 | main.py: auto-route num_frames>81 to generate_long_video() | DONE | commit f887a52 |
-| 3.3 | Test 240-frame (15s) chunked generation | DONE | Verified with WAN 1.3B (~42 min) |
+| 3.3 | Test 240-frame (15s) chunked generation | ABORTED | Stopped @ 63.6% (Performance Decay) |
 | 3.3b | Test 240-frame (15s) WAN 14B HQ chunked | IN PROGRESS | Job f131c0d2, 52.4% at 12:35 UTC 2026-04-13, ETA ~14:30 UTC |
 | 3.4 | Test 960-frame (60s) chunked generation | PENDING | Next session after 3.3b completes |
 
@@ -84,8 +84,9 @@
 ## SMOKE TEST FINDINGS (2026-04-12)
 
 - **WAN 14B HQ (T2V)**: 49 frames. Total 2395s (40 min). Inference: 493s (8.2 min).
+- **WAN 140B 240fr Chunked**: ABORTED @ 63.6%. Significant slowdown after 60% (0.13%/min). VRAM: 36.2GB. 
 - **WAN 14B HQ (I2V)**: 33 frames. Total 1283s (21 min). Inference: 187s (3.1 min).
-- **Chunked 240fr**: 1.3B model. Total 2551s (42.5 min). 
+- **Chunked 240fr (1.3B)**: 1.3B model. Total 2551s (42.5 min). 
 - **Discovery**: `generate_long_video` defaults to `1.3b`. If `14b` is intended for long videos, it must be explicitly set in the API request.
 - **WAN 14B HQ T2V 5s (81fr, 2026-04-13)**: COMPLETED. Total ~80 min (incl. 30min HDD load). Output: /outputs/video/98c9edaa-806_1776076782.mp4 (3.5MB). Downloaded locally: test_outputs/wan14b_hq_t2v_5s_81fr_720p.mp4
 - **WAN 14B HQ T2V 15s (240fr chunked, 2026-04-13)**: IN PROGRESS. Job f131c0d2, 52.4% at 12:35 UTC. ETA ~14:30 UTC. Pure GPU-bound (~220min for 4×81fr chunks).
