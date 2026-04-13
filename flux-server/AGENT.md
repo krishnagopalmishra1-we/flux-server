@@ -1,6 +1,6 @@
 # 🤖 AGENT.md — Neural Creation Studio
 
-> **Last Updated:** 2026-04-12
+> **Last Updated:** 2026-04-13
 > This file is the primary context document for any AI agent working on this codebase.
 
 ---
@@ -51,19 +51,21 @@ Job Queue (app/job_queue.py)
 
 ---
 
-## 📊 Recent Test Results (2026-04-12)
+## 📊 Recent Test Results (2026-04-13 Update)
 
 Smoke tests conducted on a **GCP A100 (40GB)** instance.
 
 | Test | Model | Params | Status | Duration |
 | :--- | :--- | :--- | :--- | :--- |
+| **WAN T2V 14B** | `wan-t2v-14b` | 720p/240fr/50st | **ABORTED** | 63.6% reached. Performance decay. |
 | **WAN T2V HQ** | `wan-t2v-14b` | 720p/49fr/50st | **PASS** | 2395s (493s inf) |
 | **WAN I2V HQ** | `wan-i2v-14b` | 720p/33fr/50st | **PASS** | 1283s (187s inf) |
 | **Chunked 240**| `wan-t2v-1.3b`| 720p/240fr/50st| **PASS** | 2551s (~42 min) |
 | **Hunyuan DL** | `hunyuan-video`| Standard | **DONE** | ~65GB SSD cache |
 
 ### Performance Discovered
-- **A100 VRAM**: Standby (1.3B) = 14.5 GB. Inference (14B NF4) = ~18-24 GB.
+- **A100 VRAM**: Standby (1.3B) = 14.5 GB. Inference (14B NF4) = ~18-24 GB. **14B Chunking (240fr)** = **36.2 GB**.
+- **14B Chunking Decay**: Observed significant inference slowdown after 60% progress (drops from ~1.4%/min to 0.13%/min). Needs investigation into KV-cache management or internal loop overhead.
 - **Chunked Default**: `generate_long_video()` defaults to `1.3b` if `model_name` is omitted in the request.
 - **GCP DNS**: Transient `compute.googleapis.com` resolution errors encountered; retry logic recommended for automation.
 

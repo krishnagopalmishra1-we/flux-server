@@ -99,7 +99,7 @@ async def _handle_video_job(job) -> dict:
         )
     else:
         num_frames = payload.get("num_frames", 33)
-        chunk_size = payload.get("chunk_size", 81)
+        chunk_size = payload.get("chunk_size", 49)
 
         # Auto-detect: use chunked generation for long videos
         if num_frames > chunk_size:
@@ -112,7 +112,7 @@ async def _handle_video_job(job) -> dict:
                 resolution=payload.get("resolution", "480p"),
                 total_frames=num_frames,
                 chunk_size=chunk_size,
-                chunk_overlap=payload.get("chunk_overlap", 20),
+                chunk_overlap=payload.get("chunk_overlap", 16),
                 fps=payload.get("fps", 16),
                 guidance_scale=payload.get("guidance_scale", 5.0),
                 num_inference_steps=payload.get("num_inference_steps", 30),
