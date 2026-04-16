@@ -5,7 +5,7 @@ Covers image generation, video generation, job status, and queue management.
 All schemas use Pydantic v2 for validation.
 """
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any
 import uuid
 
@@ -84,9 +84,11 @@ class VideoGenerateRequest(BaseModel):
     # LoRA support for Wan 2.2 models
     lora_name: Optional[str] = None
     lora_scale: float = Field(1.0, ge=0.0, le=2.0)
-    # Chunked generation — for num_frames > chunk_size, generate in chunks
-    chunk_size: int = Field(81, ge=16, le=81)
-    chunk_overlap: int = Field(20, ge=0, le=30)
+    # Chunked generation — for num_frames > chunk_size, generate in chunks.
+    # Defaults match AGENT.md perf analysis: 49fr chunks (vs old 81fr) avoid
+    # quadratic attention scaling that caused 4-5hr runtimes.
+    chunk_size: int = Field(49, ge=16, le=81)
+    chunk_overlap: int = Field(16, ge=0, le=30)
 
     @field_validator("prompt")
     @classmethod
@@ -111,18 +113,58 @@ class VideoGenerateResponse(BaseModel):
 
 
 class JobStatusResponse(BaseModel):
-    """Response body for job status polling."""
+    """Response body for job status polling.
+
+    On completion, video result fields are promoted to the top level
+    (video_url, thumbnail_b64, etc.) for easy client consumption.
+    The raw `result` dict is also included for backward compatibility.
+    """
     job_id: str
     job_type: str = ""
     model_name: str = ""
     status: str = "queued"
     progress: float = 0.0
+    # progress_pct mirrors `progress` — both names accepted by clients.
+    progress_pct: float = 0.0
     result: Dict[str, Any] = {}
     error_message: str = ""
     queue_position: int = -1
     queue_time_ms: float = 0.0
     processing_time_ms: float = 0.0
     estimated_seconds_remaining: Optional[int] = None
+    # ── Promoted video result fields (populated from result on completion) ──
+    video_url: Optional[str] = None
+    thumbnail_b64: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    inference_time_ms: Optional[float] = None
+    seed_used: Optional[int] = None
+    num_frames: Optional[int] = None
+    chunks_generated: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _promote_result_fields(self) -> "JobStatusResponse":
+        """Populate top-level video fields from the result dict when the job
+        is completed. This keeps the schema self-documenting while maintaining
+        backward compatibility with clients that read result directly."""
+        # Sync progress_pct alias
+        self.progress_pct = self.progress
+        if self.status == "completed" and self.result:
+            r = self.result
+            if self.video_url is None:
+                self.video_url = r.get("video_url") or r.get("video_url")
+            if self.thumbnail_b64 is None:
+                self.thumbnail_b64 = r.get("thumbnail_b64")
+            if self.duration_seconds is None:
+                self.duration_seconds = r.get("duration_seconds")
+            if self.inference_time_ms is None:
+                self.inference_time_ms = r.get("inference_time_ms")
+            if self.seed_used is None:
+                self.seed_used = r.get("seed_used")
+            if self.num_frames is None:
+                self.num_frames = r.get("num_frames")
+            if self.chunks_generated is None:
+                self.chunks_generated = r.get("chunks_generated")
+        return self
 
 
 class QueueStatusResponse(BaseModel):
