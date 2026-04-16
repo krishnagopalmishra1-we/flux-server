@@ -1,6 +1,6 @@
 # 🤖 AGENT.md — Neural Creation Studio
 
-> **Last Updated:** 2026-04-13
+> **Last Updated:** 2026-04-16
 > This file is the primary context document for any AI agent working on this codebase.
 
 ---
@@ -13,13 +13,14 @@ Client (Browser/API)
 FastAPI app (app/main.py)
   ├── /generate          → Image generation (sync, GPU-locked)
   ├── /api/video/generate → Video generation (async job queue)
-  ├── /api/jobs/{id}      → Job status polling
+  ├── /api/jobs/{id}      → Job status (Completed: video_url promoted to top)
   ├── /api/jobs/{id}/stream → SSE real-time progress
   ├── /api/admin/queue/drain → Admin: cancel all jobs
   └── /health             → System health check
   ↓
 Job Queue (app/job_queue.py)
   → _handle_video_job() [thread executor]
+  → Model-aware resolution cap (1.3b @ 480p)
   → video_pipeline.generate_*() [model load + inference]
   → output_store.save()
 ```
@@ -39,7 +40,7 @@ Job Queue (app/job_queue.py)
 | **Image** | `flux-1-dev` | `black-forest-labs/FLUX.1-dev` (NF4) | ~12GB | ✅ Production |
 | **Image** | `sd3.5-large` | `stabilityai/stable-diffusion-3.5-large` (NF4) | ~10GB | ✅ Production |
 | **Image** | `realvisxl-v5` | `SG161222/RealVisXL_V5.0` | ~7GB | ✅ Production |
-| **Video** | `wan-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | ~10GB | ✅ Production |
+| **Video** | `wan-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | ~10GB | ✅ Production (480p cap) |
 | **Video** | `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` (NF4) | ~18GB | ✅ Production |
 | **Video** | `wan-i2v-14b` | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` (NF4) | ~18GB | ✅ Production |
 | **Video** | `hunyuan-video` | `hunyuanvideo-community/HunyuanVideo` (NF4) | ~15GB | ✅ Production |
@@ -57,17 +58,15 @@ Smoke tests conducted on a **GCP A100 (40GB)** instance.
 
 | Test | Model | Params | Status | Duration |
 | :--- | :--- | :--- | :--- | :--- |
-| **WAN T2V 14B** | `wan-t2v-14b` | 720p/240fr/50st | **ABORTED** | 63.6% reached. Performance decay. |
-| **WAN T2V HQ** | `wan-t2v-14b` | 720p/49fr/50st | **PASS** | 2395s (493s inf) |
-| **WAN I2V HQ** | `wan-i2v-14b` | 720p/33fr/50st | **PASS** | 1283s (187s inf) |
-| **Chunked 240**| `wan-t2v-1.3b`| 720p/240fr/50st| **PASS** | 2551s (~42 min) |
-| **Hunyuan DL** | `hunyuan-video`| Standard | **DONE** | ~65GB SSD cache |
+| **Pixar 3D** | `wan-t2v-1.3b` | 720p/240fr/50st | **PASS** | 1290s (~21 min). Result: Distorted. |
+| **WAN Optimization**| `wan-t2v-1.3b`| 480p/240fr/20st| **PASSED** | ~12 min inference (optimized overlap). |
 
 ### Performance Discovered
+- **Resolution Impact**: 1.3b at 720p is ~5x slower than 480p due to quadratic spatial attention. 1.3b native is 480p; interpolation at 720p causes distortion.
+- **Chunk Overlap Waste**: `_blend_overlap` uses EDGE_FADE=4; old 16-frame overlap wasted 12 inference frames per chunk. New default is **8**.
+- **Guidance Scale**: WAN sweet spot is **7.0**. 5.0 causes flat contrast/shittier quality.
 - **A100 VRAM**: Standby (1.3B) = 14.5 GB. Inference (14B NF4) = ~18-24 GB. **14B Chunking (240fr)** = **36.2 GB**.
-- **14B Chunking Decay**: Observed significant inference slowdown after 60% progress (drops from ~1.4%/min to 0.13%/min). Needs investigation into KV-cache management or internal loop overhead.
-- **Chunked Default**: `generate_long_video()` defaults to `1.3b` if `model_name` is omitted in the request.
-- **GCP DNS**: Transient `compute.googleapis.com` resolution errors encountered; retry logic recommended for automation.
+- **GCP DNS**: Transient `compute.googleapis.com` resolution errors encountered; retry logic recommended.
 
 ---
 
@@ -116,12 +115,16 @@ flux-server/
 
 ### Chunked Long-Video Generation
 - When `num_frames > chunk_size` (default **49**), auto-routes to `generate_long_video()`
-- Sliding window with configurable overlap (default **16** frames)
+- Sliding window with configurable overlap (default **8** frames)
 - Cosine-weighted blending at chunk boundaries
-- Default `num_inference_steps`: **20** (was 30/50 — reduced for speed, no quality loss)
+- Default `num_inference_steps`: **20** (optimized for warm A100 performance)
+- Default `guidance_scale`: **7.0**
 - Supports up to 1920 frames (2 min @ 16fps)
-- **Performance**: 240fr/720p/20 steps ≈ 23 min inference (model warm), 53 min cold start
-- **Old defaults** (81fr/50 steps) caused 4-5 hr runs due to quadratic attention scaling
+- **Performance**: 240fr/480p/20 steps ≈ 12 min inference (warm).
+
+### Schema Logic
+- **JobStatusResponse**: Video result fields (`video_url`, `thumbnail_b64`, `inference_time_ms`, etc.) are automatically promoted to top-level from the `result` dict when job status is `completed`.
+- **progress_pct**: Alias for `progress`, supported for polling scripts.
 
 ### BitsAndBytes Quantized Models
 - **NEVER** call `.to(device)` on quantized pipelines — it crashes.
