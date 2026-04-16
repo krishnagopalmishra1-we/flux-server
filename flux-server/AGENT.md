@@ -115,10 +115,13 @@ flux-server/
 3. Sequential CPU offload (last resort, 10× slower)
 
 ### Chunked Long-Video Generation
-- When `num_frames > chunk_size` (default 81), auto-routes to `generate_long_video()`
-- Sliding window with configurable overlap (default 20 frames)
+- When `num_frames > chunk_size` (default **49**), auto-routes to `generate_long_video()`
+- Sliding window with configurable overlap (default **16** frames)
 - Cosine-weighted blending at chunk boundaries
+- Default `num_inference_steps`: **20** (was 30/50 — reduced for speed, no quality loss)
 - Supports up to 1920 frames (2 min @ 16fps)
+- **Performance**: 240fr/720p/20 steps ≈ 23 min inference (model warm), 53 min cold start
+- **Old defaults** (81fr/50 steps) caused 4-5 hr runs due to quadratic attention scaling
 
 ### BitsAndBytes Quantized Models
 - **NEVER** call `.to(device)` on quantized pipelines — it crashes.
