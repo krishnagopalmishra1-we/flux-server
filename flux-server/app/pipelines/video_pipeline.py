@@ -50,9 +50,9 @@ if torch.cuda.is_available():
     torch.cuda.set_per_process_memory_fraction(0.95)
 
 RESOLUTION_MAP = {
-    "480p":  (480, 848),
-    "720p":  (720, 1280),
-    "540p":  (544, 960),   # HunyuanVideo native 9:16
+    "480p":  (480, 848),    # wan-t2v-1.3b native speed tier
+    "540p":  (544, 960),    # mid tier: 1.3B quality / HunyuanVideo native 9:16
+    "720p":  (720, 1280),   # wan-t2v-14b / wan-i2v-14b only (OOM on 1.3B)
 }
 
 VIDEO_LORA_DIR = Path("video_loras")
@@ -457,9 +457,10 @@ class VideoPipeline:
         resolution: str = "480p",
         total_frames: int = 240,
         chunk_size: int = 49,
-        chunk_overlap: int = 16,
+        chunk_overlap: int = 8,   # Only EDGE_FADE=4 frames are actually blended;
+                                   # 16 overlap was wasting 12 inference frames per chunk.
         fps: int = 16,
-        guidance_scale: float = 5.0,
+        guidance_scale: float = 7.0,   # WAN sweet spot (5.0 undershoots, >8.5 oversaturates)
         num_inference_steps: int = 20,
         seed: Optional[int] = None,
         lora_name: Optional[str] = None,
@@ -471,8 +472,13 @@ class VideoPipeline:
         """Generate a long video by chunking into overlapping segments.
 
         Chunks are generated sequentially, each with `chunk_overlap` frames
-        overlapping the previous chunk. Overlapping regions are blended
-        using cosine weights for smooth temporal transitions.
+        overlapping the previous chunk. Overlapping regions are blended using a
+        short edge-fade (EDGE_FADE=4 frames) for smooth temporal transitions.
+
+        Performance notes (1.3B @ 480p, 49fr chunks, 8 overlap):
+          step = 49 - 8 = 41 frames advance per chunk
+          240fr → 6 chunks × ~2 min each ≈ ~12 min warm inference
+          (vs old 81fr/720p/16-overlap config → 4 chunks × ~20min = 80 min)
         """
         if progress_callback:
             progress_callback(1.0)
