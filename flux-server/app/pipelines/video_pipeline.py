@@ -1054,7 +1054,15 @@ def _make_step_callback(
 
 
 def _blend_overlap(tail_frames: list, head_frames: list) -> list:
-    """Blend overlapping frames from two chunks using cosine weights.
+    """Blend overlapping frames from two chunks with a short edge fade.
+
+    The old cosine blend across all N frames created a muddy 50/50 midpoint
+    whenever two chunks had visually different content (different scenes, lighting,
+    colors), which appeared as a blackout to the viewer.
+
+    Fix: only fade the first EDGE_FADE frames (prev → new), then use new chunk
+    content directly for the rest of the overlap. This eliminates the muddy
+    midpoint while still softening the hard cut at the chunk boundary.
 
     Args:
         tail_frames: Last N frames from the previous chunk.
@@ -1067,22 +1075,29 @@ def _blend_overlap(tail_frames: list, head_frames: list) -> list:
     from PIL import Image as _PILImage
 
     n = min(len(tail_frames), len(head_frames))
+    if n == 0:
+        return list(head_frames)
+
+    # Only fade for the first few frames; rest uses new chunk content directly.
+    # Keeps the scene coherent instead of ghosting two different scenes together.
+    EDGE_FADE = min(4, n)
+
     blended = []
     for i in range(n):
-        # Cosine weight: 1.0 at start (all tail) → 0.0 at end (all head)
-        w = 0.5 * (1.0 + np.cos(np.pi * i / max(n - 1, 1)))
-
         a = tail_frames[i]
         b = head_frames[i]
 
-        # Convert to numpy arrays
         arr_a = np.array(a).astype(np.float32)
         arr_b = np.array(b).astype(np.float32)
 
-        # Weighted blend
-        arr_out = (w * arr_a + (1.0 - w) * arr_b).clip(0, 255).astype(np.uint8)
+        if i < EDGE_FADE:
+            # Linear fade: 1.0 (all prev) → 0.0 (all new) over EDGE_FADE frames
+            w = 1.0 - (i / EDGE_FADE)
+            arr_out = (w * arr_a + (1.0 - w) * arr_b).clip(0, 255).astype(np.uint8)
+        else:
+            # New chunk content directly — no ghosting, no blackout
+            arr_out = arr_b.clip(0, 255).astype(np.uint8)
 
-        # Return as PIL Image if inputs were PIL
         if isinstance(a, _PILImage.Image):
             blended.append(_PILImage.fromarray(arr_out))
         else:
