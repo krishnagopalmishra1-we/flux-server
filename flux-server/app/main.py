@@ -64,20 +64,8 @@ async def _handle_video_job(job) -> dict:
 
     loop = asyncio.get_running_loop()
 
-    # ── Model-aware resolution cap ───────────────────────────────────────────
-    # wan-t2v-1.3b at 720p is ~5x slower than 480p: spatial tokens grow
-    # quadratically (720p = 14,400 vs 480p = 6,360 spatial tokens per frame).
-    # The 1.3B model also produces visibly worse quality at 720p vs its native
-    # 480p operating point. Auto-clamp to protect users from this footgun.
-    _SMALL_MODELS = {"wan-t2v-1.3b"}
-    _MAX_RES_SMALL = "480p"
-    requested_res = payload.get("resolution", "480p")
-    if job.model_name in _SMALL_MODELS and requested_res in ("540p", "720p"):
-        logger.warning(
-            f"[{job.id[:8]}] {job.model_name} requested at {requested_res} — "
-            f"clamping to {_MAX_RES_SMALL} (720p is ~5x slower with no quality gain on 1.3B)"
-        )
-        payload = {**payload, "resolution": _MAX_RES_SMALL}
+    # Removed: 1.3b model-aware resolution cap because 720p native interpolation
+    # provides vastly superior output detail for Anime despite the 5x slowdown.
 
     if payload.get("source_image_b64"):
         fn = functools.partial(

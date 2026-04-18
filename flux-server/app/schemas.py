@@ -75,14 +75,13 @@ class VideoGenerateRequest(BaseModel):
     negative_prompt: Optional[str] = Field(None, max_length=1000)
     num_frames: int = Field(33, ge=16, le=1920)
     fps: int = Field(16, ge=8, le=30)
-    # 480p = best speed for 1.3B, 540p = mid quality, 720p = 14B/HunyuanVideo only.
-    # 1.3B at 720p is ~5x slower than 480p due to quadratic spatial attention scaling.
-    resolution: str = Field("480p", pattern=r"^(480p|540p|720p)$")
-    # guidance_scale=7.0 is the WAN documented sweet spot (5.0 undershoots contrast,
-    # >8.5 causes oversaturation artifacts on small models).
-    guidance_scale: float = Field(7.0, ge=0.0, le=20.0)
-    # 20 steps: matches AGENT.md. Sufficient for 1.3B; use 30-50 for 14B quality runs.
-    num_inference_steps: int = Field(20, ge=10, le=100)
+    # resolution: all models can receive 720p; the model itself determines quality.
+    # 480p = fastest, 540p = balanced, 720p = highest detail.
+    resolution: str = Field("720p", pattern=r"^(480p|540p|720p)$")
+    # guidance_scale=5.0: WAN optimal for 1.3B. Higher values cause saturation artifacts.
+    guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
+    # 30 steps: good quality/speed balance for all models.
+    num_inference_steps: int = Field(30, ge=10, le=100)
     seed: Optional[int] = None
     # For Image-to-Video: base64-encoded source image
     source_image_b64: Optional[str] = None
