@@ -62,9 +62,14 @@ Smoke tests conducted on a **GCP A100 (40GB)** instance.
 | **WAN Optimization**| `wan-t2v-1.3b`| 480p/240fr/20st| **PASSED** | ~12 min inference (optimized overlap). |
 
 ### Performance Discovered
-- **Resolution Impact**: 1.3b at 720p is ~5x slower than 480p due to quadratic spatial attention. 1.3b native is 480p; interpolation at 720p causes distortion.
-- **Chunk Overlap Waste**: `_blend_overlap` uses EDGE_FADE=4; old 16-frame overlap wasted 12 inference frames per chunk. New default is **8**.
-- **Guidance Scale**: WAN sweet spot is **7.0**. 5.0 causes flat contrast/shittier quality.
+- **Resolution Impact**: 1.3b at 720p is ~5x slower than 480p due to quadratic spatial attention. 1.3b native is 480p;
+- **Resolution Unlocked**: Removed the 480p clamp in `main.py` for 1.3B. Native 720p interpolation provides vastly superior detail for Anime.
+- **Blending Overhaul**: Replaced the 4-frame harsh edge-fade with a 16-frame **Cosine Wave Blend** in `video_pipeline.py`. This hides the model's initialization noise and eliminates the 'black jump' at chunk boundaries.
+- **Optimized Defaults**: Set `guidance_scale=5.0` and `num_inference_steps=30` as the balance point for 1.3B quality without CFG burn.
+
+#### Technical Implementation
+- **Blending**: `0.5 * (1 + cos(pi * i / (n-1)))` weighting across entire overlap `n`.
+- **Chunking**: Recommended 16-frame overlap for long generations.
 - **A100 VRAM**: Standby (1.3B) = 14.5 GB. Inference (14B NF4) = ~18-24 GB. **14B Chunking (240fr)** = **36.2 GB**.
 - **GCP DNS**: Transient `compute.googleapis.com` resolution errors encountered; retry logic recommended.
 

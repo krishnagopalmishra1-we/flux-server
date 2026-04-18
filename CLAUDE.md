@@ -43,9 +43,12 @@ Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss
 
 ---
 
-## SPEED & QUALITY OPTIMIZATION — DEPLOYED (2026-04-16)
-
-**Changes in commit `b0d9150`**:
+## Status: NATIVE HQ DEPLOYED
+**Last Update: 2026-04-18**
+- **Issue**: 1.3B was forced to 480p and had 'black jumps' on 15s videos.
+- **Fix**: Removed 480p clamp in `main.py`. Implemented 16-frame **Cosine Wave Blending** in `video_pipeline.py`.
+- **Outcome**: 15s 720p generations are now smooth and detailed.
+- **Infrastructure**: All changes pushed and VM stopping.
 
 | Feature | Change | impact |
 |------|--------|--------|
