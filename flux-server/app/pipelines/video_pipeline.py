@@ -55,7 +55,12 @@ RESOLUTION_MAP = {
     "720p":  (720, 1280),   # wan-t2v-14b / wan-i2v-14b only (OOM on 1.3B)
 }
 
-VIDEO_LORA_DIR = Path("video_loras")
+def get_video_lora_dir() -> Path:
+    """Return the configured persistent video LoRA directory."""
+    return Path(get_settings().video_lora_dir)
+
+
+VIDEO_LORA_DIR = get_video_lora_dir()
 
 
 class VideoPipeline:
@@ -375,8 +380,21 @@ class VideoPipeline:
     # ──────────────────────────────────────────────
 
     def get_available_loras(self) -> list[str]:
-        VIDEO_LORA_DIR.mkdir(exist_ok=True)
-        return [f.name for f in VIDEO_LORA_DIR.glob("*.safetensors")]
+        lora_dir = get_video_lora_dir()
+        lora_dir.mkdir(parents=True, exist_ok=True)
+        return sorted(f.name for f in lora_dir.glob("*.safetensors") if f.is_file())
+
+    def lora_storage_stats(self) -> dict:
+        lora_dir = get_video_lora_dir()
+        files = list(lora_dir.glob("*.safetensors")) if lora_dir.exists() else []
+        total_bytes = sum(f.stat().st_size for f in files if f.is_file())
+        return {
+            "dir": str(lora_dir),
+            "exists": lora_dir.exists(),
+            "count": len(files),
+            "total_mb": round(total_bytes / (1024 * 1024), 1),
+            "files": sorted(f.name for f in files if f.is_file()),
+        }
 
     def _apply_lora(self, lora_name: Optional[str], lora_scale: float) -> None:
         if not lora_name or lora_name == "None":
@@ -391,7 +409,7 @@ class VideoPipeline:
                 self._pipe.set_adapters(adapter, adapter_weights=[scale])
             return
 
-        lora_path = VIDEO_LORA_DIR / lora_name
+        lora_path = get_video_lora_dir() / lora_name
         if not lora_path.exists():
             logger.warning(f"Video LoRA not found: {lora_path} — skipping")
             return
@@ -982,27 +1000,34 @@ class VideoPipeline:
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp_path = tmp.name
 
-        np_frames = []
-        for frame in frames:
-            if isinstance(frame, _PILImage.Image):
-                np_frames.append(np.array(frame))
-            else:
-                arr = np.array(frame)
-                if arr.dtype != np.uint8:
-                    arr = (arr * 255).clip(0, 255).astype(np.uint8)
-                np_frames.append(arr)
-
-        writer = imageio.get_writer(
-            tmp_path,
-            fps=fps,
-            codec="libx264",
-            output_params=["-crf", "18", "-preset", "fast", "-pix_fmt", "yuv420p"],
-        )
-        for frame in np_frames:
-            writer.append_data(frame)
-        writer.close()
-
-        return output_store.save_file_from_path(tmp_path, "video", job_id)
+        writer = None
+        try:
+            writer = imageio.get_writer(
+                tmp_path,
+                fps=fps,
+                codec="libx264",
+                output_params=["-crf", "18", "-preset", "fast", "-pix_fmt", "yuv420p"],
+            )
+            for frame in frames:
+                if isinstance(frame, _PILImage.Image):
+                    arr = np.array(frame)
+                else:
+                    arr = np.array(frame)
+                    if arr.dtype != np.uint8:
+                        arr = (arr * 255).clip(0, 255).astype(np.uint8)
+                writer.append_data(arr)
+            writer.close()
+            writer = None
+            return output_store.save_file_from_path(tmp_path, "video", job_id)
+        finally:
+            if writer is not None:
+                writer.close()
+            tmp_file = Path(tmp_path)
+            if tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except Exception:
+                    logger.warning("Could not delete temporary video file: %s", tmp_path)
 
     def _frame_to_b64(self, frame) -> Optional[str]:
         if frame is None:

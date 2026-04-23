@@ -158,6 +158,9 @@ class OutputStore:
         Returns:
             Number of files deleted
         """
+        if self.ttl_seconds <= 0:
+            return 0
+
         now = time.time()
         deleted = 0
 

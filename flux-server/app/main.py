@@ -1,6 +1,8 @@
 import json
 import logging
 import asyncio
+import time
+import shutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -18,7 +20,10 @@ from app.pipeline import inference_pipeline as flux_pipeline
 from app.model_manager import ModelCategory
 from app.job_queue import job_queue, JobPriority, JobStatus
 from app.output_store import output_store
+from app.runtime import gpu_runtime
+from app.pipeline import get_lora_dir
 from app.pipelines.video_pipeline import video_pipeline
+from app.pipelines.video_pipeline import get_video_lora_dir
 
 from app.config import get_settings
 
@@ -28,6 +33,49 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _validate_lora_upload(safe_name: str, contents: bytes) -> None:
+    settings = get_settings()
+    max_bytes = settings.max_lora_upload_mb * 1024 * 1024
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(contents) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"LoRA upload is too large ({len(contents) / (1024 * 1024):.1f}MB). "
+                f"Limit is {settings.max_lora_upload_mb}MB. Full checkpoints are not accepted."
+            ),
+        )
+    if not safe_name.endswith(".safetensors"):
+        raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
+
+
+def _storage_summary(path: Path) -> dict:
+    files = list(path.glob("*.safetensors")) if path.exists() else []
+    total_bytes = sum(f.stat().st_size for f in files if f.is_file())
+    return {
+        "dir": str(path),
+        "exists": path.exists(),
+        "count": len(files),
+        "total_mb": round(total_bytes / (1024 * 1024), 1),
+        "files": sorted(f.name for f in files if f.is_file()),
+    }
+
+
+def _ensure_write_budget(path: Path, required_bytes: int, reserve_gb: float = 2.0) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(str(path))
+    reserve_bytes = int(reserve_gb * 1024 * 1024 * 1024)
+    if usage.free - required_bytes < reserve_bytes:
+        raise HTTPException(
+            status_code=507,
+            detail=(
+                f"Insufficient disk space in {path}: keep at least {reserve_gb:.1f}GB free "
+                "after upload."
+            ),
+        )
 
 
 # ═══════════════════════════════════════════════════
@@ -42,18 +90,14 @@ def get_user_id(request: Request) -> str:
 async def _handle_video_job(job) -> dict:
     """Process a video generation job with real-time progress reporting.
 
-    Video pipelines call blocking model-load and inference code. Running them
-    directly in the async handler blocks the event loop for 10-30 min, which
-    prevents the watchdog task from ticking and breaks call_soon_threadsafe
-    from the keepalive thread. We run the sync work in a thread executor so
-    the event loop stays free.
+    The job queue executes this handler in its worker thread while holding the
+    shared GPU lock, so blocking model load/inference work cannot race with
+    image generation.
     """
-    import functools
     payload = job.payload
 
-    # Unload image model before loading video model — mirrors _run_image_generation
-    # which calls video_pipeline.unload() before loading FLUX. Without this, both
-    # models can be in VRAM simultaneously (FLUX ~17 GB + WAN 14B ~22 GB = OOM on A100 40 GB).
+    # Unload image model before loading video model. The shared GPU lock prevents
+    # image generation from unloading this video model mid-inference.
     flux_pipeline.model_manager.unload_all()
 
     # Check disk space before starting generation
@@ -62,15 +106,8 @@ async def _handle_video_job(job) -> dict:
     def _progress(pct: float):
         job_queue.set_progress(job.id, pct)
 
-    loop = asyncio.get_running_loop()
-
-    # Removed: 1.3b model-aware resolution cap because 720p native interpolation
-    # provides vastly superior output detail for Anime despite the 5x slowdown.
-
     if payload.get("source_image_b64"):
-        fn = functools.partial(
-            _run_sync,
-            video_pipeline.generate_image_to_video,
+        return await video_pipeline.generate_image_to_video(
             source_image_b64=payload["source_image_b64"],
             prompt=payload.get("prompt", ""),
             model_name=job.model_name,
@@ -86,9 +123,7 @@ async def _handle_video_job(job) -> dict:
             job=job,
         )
     elif job.model_name == "hunyuan-video":
-        fn = functools.partial(
-            _run_sync,
-            video_pipeline.generate_hunyuan_video,
+        return await video_pipeline.generate_hunyuan_video(
             prompt=payload["prompt"],
             resolution=payload.get("resolution", "720p"),
             num_frames=payload.get("num_frames", 129),
@@ -106,9 +141,7 @@ async def _handle_video_job(job) -> dict:
 
         # Auto-detect: use chunked generation for long videos
         if num_frames > chunk_size:
-            fn = functools.partial(
-                _run_sync,
-                video_pipeline.generate_long_video,
+            return await video_pipeline.generate_long_video(
                 prompt=payload["prompt"],
                 model_name=job.model_name,
                 negative_prompt=payload.get("negative_prompt", ""),
@@ -127,9 +160,7 @@ async def _handle_video_job(job) -> dict:
                 job=job,
             )
         else:
-            fn = functools.partial(
-                _run_sync,
-                video_pipeline.generate_text_to_video,
+            return await video_pipeline.generate_text_to_video(
                 prompt=payload["prompt"],
                 model_name=job.model_name,
                 negative_prompt=payload.get("negative_prompt", ""),
@@ -145,33 +176,8 @@ async def _handle_video_job(job) -> dict:
                 progress_callback=_progress,
                 job=job,
             )
-    return await loop.run_in_executor(None, fn)
-
-
-def _run_sync(coro_fn, **kwargs):
-    """Run an async coroutine synchronously in a thread-executor context.
-
-    asyncio.run_in_executor dispatches to a ThreadPoolExecutor, which cannot
-    await coroutines. This helper creates a new event loop for the thread,
-    runs the coroutine to completion, and closes it.
-    """
-    import asyncio as _asyncio
-    loop = _asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro_fn(**kwargs))
-    finally:
-        loop.close()
-
-
-# Separate GPU locks for image and video generation so a long video job
-# doesn't block a fast image request. On a single GPU both locks serialize
-# implicitly (each handler unloads the other modality's model first).
-_gpu_lock_image = asyncio.Lock()
-_gpu_lock_video = asyncio.Lock()
-
-
 async def _preload_video_model_background():
-    """Background pre-load — DISABLED: holds _gpu_lock for 15-20min on cold start, blocking
+    """Background pre-load — DISABLED: holds the GPU lock for 15-20min on cold start, blocking
     incoming jobs at 0% progress for the entire model download/load duration. Models load
     on first request instead; the 1800s watchdog timeout accommodates first-run load time."""
     logger.info("Video pre-load: disabled (first request will trigger model load)")
@@ -186,14 +192,16 @@ async def lifespan(app: FastAPI):
     # Register job handlers for async generation
     job_queue.register_handler("video", _handle_video_job)
 
-    # Share the video GPU lock with the job queue so video jobs
-    # are serialised through the lock.
-    job_queue.gpu_lock = _gpu_lock_video
+    # Share the single GPU lock with the job queue so video jobs serialize with
+    # image generation and cannot race model unload/load operations.
+    job_queue.gpu_lock = gpu_runtime.lock
 
     # Create output directories
     settings = get_settings()
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.output_dir).joinpath("video").mkdir(exist_ok=True)
+    get_lora_dir().mkdir(parents=True, exist_ok=True)
+    get_video_lora_dir().mkdir(parents=True, exist_ok=True)
 
     # Schedule periodic output cleanup (runs every hour, deletes files older than TTL)
     cleanup_task = asyncio.create_task(_periodic_output_cleanup())
@@ -264,6 +272,17 @@ async def health():
     )
 
 
+@app.get("/api/auth/status")
+async def auth_status():
+    """Expose whether browser clients must send X-API-Key."""
+    valid_keys = [k.strip() for k in get_settings().api_keys.split(",") if k.strip()]
+    return {
+        "api_key_required": bool(valid_keys),
+        "configured_key_count": len(valid_keys),
+        "header": "X-API-Key",
+    }
+
+
 @app.get("/models")
 async def list_models(category: str = None):
     """List available generation models and metadata, optionally filtered by category."""
@@ -288,8 +307,23 @@ async def list_loras(model_name: str = "flux-1-dev"):
     """List LoRA files compatible with the selected model."""
     return {
         "model_name": model_name,
+        "lora_dir": str(get_lora_dir()),
         "recommended_scale": flux_pipeline.get_recommended_lora_scale(model_name),
         "loras": flux_pipeline.get_compatible_loras(model_name),
+    }
+
+
+@app.get("/api/loras/diagnostics")
+async def lora_diagnostics():
+    """Show configured LoRA storage paths and visible adapter files."""
+    return {
+        "image": flux_pipeline.lora_storage_stats(),
+        "video": video_pipeline.lora_storage_stats(),
+        "legacy_paths": {
+            "image": _storage_summary(Path("loras")),
+            "video": _storage_summary(Path("video_loras")),
+        },
+        "max_upload_mb": get_settings().max_lora_upload_mb,
     }
 
 
@@ -304,17 +338,17 @@ async def upload_lora(file: UploadFile = File(...)):
     if not safe_name or safe_name != file.filename.replace("\\", "/").split("/")[-1]:
         raise HTTPException(status_code=400, detail="Invalid filename.")
 
-    lora_dir = Path("loras")
-    lora_dir.mkdir(exist_ok=True)
+    lora_dir = get_lora_dir()
+    lora_dir.mkdir(parents=True, exist_ok=True)
     dest = lora_dir / safe_name
 
     contents = await file.read()
-    if len(contents) == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    _validate_lora_upload(safe_name, contents)
+    _ensure_write_budget(lora_dir, len(contents))
 
     dest.write_bytes(contents)
     logger.info("LoRA uploaded: %s (%d bytes)", safe_name, len(contents))
-    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents)}
+    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents), "dir": str(lora_dir)}
 
 
 
@@ -350,7 +384,7 @@ async def generate(
     check_rate_limit(request, api_key)
 
     try:
-        async with _gpu_lock_image:
+        async with gpu_runtime.claim():
             img_b64, seed_used, elapsed_ms = await asyncio.to_thread(
                 _run_image_generation, req
             )
@@ -385,6 +419,10 @@ async def generate_video(req: VideoGenerateRequest, request: Request):
         raise HTTPException(status_code=503, detail="Video generation is disabled.")
 
     check_rate_limit(request, "")
+    try:
+        output_store.check_disk_space(min_gb=10.0)
+    except RuntimeError as e:
+        raise HTTPException(status_code=507, detail=str(e))
 
     try:
         job = await job_queue.submit(
@@ -476,6 +514,9 @@ async def drain_queue(request: Request):
     for job in list(job_queue._jobs.values()):
         if job.status == JobStatus.QUEUED:
             job.status = JobStatus.CANCELLED
+            job.completed_at = time.time()
+            job.error_message = "Job cancelled by admin queue drain."
+            job_queue._notify_terminal(job)
             cancelled += 1
         elif job.status == JobStatus.PROCESSING:
             job.cancel_flag = True
@@ -558,7 +599,7 @@ async def stream_job_progress(job_id: str, request: Request):
 async def list_video_loras():
     """List LoRA files available for video models."""
     loras = video_pipeline.get_available_loras()
-    return {"loras": loras, "count": len(loras)}
+    return {"loras": loras, "count": len(loras), "lora_dir": str(get_video_lora_dir())}
 
 
 @app.post("/api/video/loras/upload")
@@ -573,15 +614,15 @@ async def upload_video_lora(file: UploadFile = File(...)):
         or safe_name != file.filename.replace("\\", "/").split("/")[-1]
     ):
         raise HTTPException(status_code=400, detail="Invalid filename.")
-    from app.pipelines.video_pipeline import VIDEO_LORA_DIR
-    VIDEO_LORA_DIR.mkdir(exist_ok=True)
-    dest = VIDEO_LORA_DIR / safe_name
+    lora_dir = get_video_lora_dir()
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    dest = lora_dir / safe_name
     contents = await file.read()
-    if len(contents) == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    _validate_lora_upload(safe_name, contents)
+    _ensure_write_budget(lora_dir, len(contents))
     dest.write_bytes(contents)
     logger.info("Video LoRA uploaded: %s (%d bytes)", safe_name, len(contents))
-    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents)}
+    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents), "dir": str(lora_dir)}
 
 
 # ═══════════════════════════════════════════════════
@@ -608,3 +649,11 @@ except Exception as _e:
 @app.get("/", include_in_schema=False)
 async def root_ui():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/{page_name:path}", include_in_schema=False)
+async def routed_ui(page_name: str):
+    """Serve the SPA shell for public UI routes."""
+    if page_name in {"image", "video", "queue"}:
+        return FileResponse(STATIC_DIR / "index.html")
+    raise HTTPException(status_code=404, detail="Not found")

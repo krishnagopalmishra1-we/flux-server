@@ -1,275 +1,190 @@
-# Neural Creation Studio
+# Hyperforge AI
 
-> **High-performance AI generation platform for images and videos.**
-> Powered by FLUX.1, Stable Diffusion 3.5, Wan 2.2, and HunyuanVideo on a single A100 GPU.
+> Bright, public-facing image and video studio built on FastAPI, FLUX, Wan, and HunyuanVideo, tuned for a single A100 40GB GPU.
 
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)](https://fastapi.tiangolo.com)
-[![CUDA 12.4](https://img.shields.io/badge/CUDA-12.4-76B900.svg)](https://developer.nvidia.com/cuda-toolkit)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## What Is Running
 
----
+`flux-server/` is the active production app. It serves:
 
-## ✨ Features
+- Image generation at `POST /generate`
+- Video generation at `POST /api/video/generate`
+- Job polling, queue state, and SSE progress under `/api/jobs/*`
+- LoRA listing and upload endpoints for image and video adapters
+- The Hyperforge AI web UI at `/`, `/image`, `/video`, and `/queue`
 
-### Image Generation
-- **FLUX.1-dev** — State-of-the-art 12B parameter model with NF4 quantization
-- **SD3.5-Large** — Flexible multi-modal prompt adhesion
-- **RealVisXL V5** — Photorealistic portraits and product photography
-- LoRA support with runtime upload
+The service is designed for fixed constraints:
 
-### Video Generation
-- **Wan 2.2 T2V** — Text-to-video in 1.3B (fast) and 14B (cinematic quality) variants
-- **Wan 2.2 I2V** — Image-to-video animation from a source image
-- **HunyuanVideo** — 720p NF4-quantized video generation
-- **Chunked long-video** — Generate 1-2 minute videos via sliding window with temporal blending
-- LoRA support for Wan models
+- One A100 40GB GPU
+- Limited disk
+- No extra GPU or storage expansion
+- One model resident in VRAM at a time
 
-### Platform
-- **Async job queue** with real-time SSE progress streaming
-- **Job cancellation** for both queued and running jobs
-- **ETA estimation** based on inference progress rate
-- **Tiered OOM recovery** — reduce steps → reduce frames → CPU offload
-- **Disk space guard** and automatic output cleanup
-- **Admin API** for queue management
-- **Built-in web UI** at `http://localhost:8080/`
+## Current Model Set
 
----
+### Image
 
-## 🚀 Quick Start
+| Key | Backend model | Runtime notes |
+|---|---|---|
+| `flux-1-dev` | `black-forest-labs/FLUX.1-dev` | BF16 path on A100. This replaced the broken NF4 image path. |
+| `sd3.5-large` | `stabilityai/stable-diffusion-3.5-large` | NF4 transformer path. |
+| `realvisxl-v5` | `SG161222/RealVisXL_V5.0` | FP16 SDXL photoreal model. |
+| `juggernaut-xl` | `RunDiffusion/Juggernaut-XL-v9` | FP16 SDXL general-purpose model. |
 
-### Prerequisites
-- NVIDIA GPU with ≥24GB VRAM (A100 40GB recommended)
-- Docker with NVIDIA Container Toolkit
-- Hugging Face token ([get one free](https://huggingface.co/settings/tokens))
+### Video
 
-### 1. Clone and configure
+| Key | Backend model | Runtime notes |
+|---|---|---|
+| `wan-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | Default video model. Fastest, safest option on A100. Default output is `480p`, short clips. |
+| `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | NF4 dual-transformer path. Higher quality, stricter admission limits. |
+| `wan-i2v-14b` | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | NF4 image-to-video path. Requires `source_image_b64`. |
+| `hunyuan-video` | `hunyuanvideo-community/HunyuanVideo` | 720p-capable path with NF4 transformer and CPU-offloaded text encoder. |
+
+## Runtime Safety Rules
+
+- Image and video pipelines share a single GPU runtime coordinator.
+- Image and video generations do not run concurrently on GPU.
+- Video validation is model-aware and rejects settings that are unsafe for A100 40GB.
+- Long videos stream frame output to disk instead of retaining all encoded frames in RAM.
+- Output files, temp files, uploads, and model cache usage are guarded for limited disk environments.
+
+## LoRA Storage
+
+Image and video LoRAs now use explicit persistent directories from config instead of fragile relative paths.
+
+- `LORA_DIR=/mnt/hf-cache/loras`
+- `VIDEO_LORA_DIR=/mnt/hf-cache/video_loras`
+- `MAX_LORA_UPLOAD_MB=1536`
+
+Useful endpoints:
+
+- `GET /loras?model_name=flux-1-dev`
+- `GET /api/video/loras`
+- `GET /api/loras/diagnostics`
+- `POST /loras/upload`
+- `POST /api/video/loras/upload`
+
+If LoRAs appear missing, check the diagnostics endpoint first and verify the mounted host path contains the uploaded `.safetensors` files.
+
+## API Auth
+
+Image generation can be protected with `API_KEYS`. If `API_KEYS` is set, requests must send `X-API-Key`. For local testing, leave `API_KEYS` blank.
+
+Check current mode with:
+
+```bash
+curl http://localhost:8080/api/auth/status
+```
+
+## Quick Start
 
 ```bash
 git clone https://github.com/krishnagopalmishra1-we/flux-server.git
-cd flux-server
+cd flux-server/flux-server
 cp .env.example .env
-```
-
-Edit `.env` and set your `HF_TOKEN`:
-```env
-HF_TOKEN=hf_your_token_here
-API_KEYS=your-secret-key
-ADMIN_API_KEY=your-admin-key
-```
-
-### 2. Launch
-
-```bash
 docker compose up --build -d
 ```
 
-The server starts at `http://localhost:8080`. First model load takes 5-15 minutes (downloading weights).
+Minimum required env:
 
-### 3. Verify
+```env
+HF_TOKEN=hf_your_token_here
+API_KEYS=
+LORA_DIR=/mnt/hf-cache/loras
+VIDEO_LORA_DIR=/mnt/hf-cache/video_loras
+WAN_DEFAULT_VARIANT=1.3b
+```
+
+Then verify:
 
 ```bash
 curl http://localhost:8080/health
+curl http://localhost:8080/models
+curl http://localhost:8080/api/auth/status
 ```
 
----
+## Public UI Notes
 
-## 📡 API Reference
+The web UI is branded as Hyperforge AI and is intentionally public-facing:
 
-### Image Generation
+- No internal GPU or VRAM details in normal UI flows
+- Real routes for `/image`, `/video`, and `/queue`
+- Predefined image and video styles
+- Sample prompts and richer visuals
+
+Internal health details remain available through API endpoints for debugging.
+
+## Core Endpoints
+
+### Image
+
+`POST /generate`
+
+Main fields:
+
+- `prompt`
+- `model_name`
+- `negative_prompt`
+- `width`
+- `height`
+- `num_inference_steps`
+- `guidance_scale`
+- `seed`
+- `lora_name`
+- `lora_scale`
+
+### Video
+
+`POST /api/video/generate`
+
+Main fields:
+
+- `prompt`
+- `model_name`
+- `negative_prompt`
+- `num_frames`
+- `fps`
+- `resolution`
+- `num_inference_steps`
+- `guidance_scale`
+- `seed`
+- `source_image_b64`
+- `lora_name`
+- `lora_scale`
+- `chunk_size`
+- `chunk_overlap`
+
+Current safe defaults:
+
+- `model_name=wan-t2v-1.3b`
+- `resolution=480p`
+- `num_frames=33`
+- `num_inference_steps=30`
+
+### Jobs and Queue
+
+- `GET /api/jobs`
+- `GET /api/jobs/{job_id}`
+- `GET /api/jobs/{job_id}/stream`
+- `DELETE /api/jobs/{job_id}`
+- `GET /api/queue/status`
+
+## Repository Notes
+
+- `flux-server/` is canonical.
+- Root `app/`, root Docker assets, and older notes are legacy unless explicitly revived.
+- Music and animation tabs were removed from the active UI because the matching backend flows do not exist.
+
+## Deployment
+
+The GCP deployment scripts live under `deploy/gcp/`. The production VM used during recent testing was:
+
+- Project: `flux-lora-gpu-project`
+- Zone: `us-central1-a`
+- Instance: `flux-a100-preemptible`
+
+## Development Sanity Checks
 
 ```bash
-POST /generate
+python -m py_compile app\config.py app\job_queue.py app\main.py app\model_manager.py app\output_store.py app\pipeline.py app\runtime.py app\schemas.py app\pipelines\video_pipeline.py
+git diff --check
 ```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `prompt` | string | *required* | Text prompt (1-2000 chars) |
-| `model_name` | string | `flux-1-dev` | Model: `flux-1-dev`, `sd3.5-large`, `realvisxl-v5` |
-| `negative_prompt` | string | `null` | Negative prompt |
-| `width` | int | 1024 | Image width (256-2048, multiple of 8) |
-| `height` | int | 1024 | Image height (256-2048, multiple of 8) |
-| `num_inference_steps` | int | 28 | Denoising steps (1-50) |
-| `guidance_scale` | float | 3.5 | Classifier-free guidance (0-20) |
-| `seed` | int | `null` | Random seed (null = random) |
-| `lora_name` | string | `null` | LoRA adapter name |
-| `lora_scale` | float | 1.0 | LoRA strength (0-2) |
-
-**Response:** JSON with `image_base64`, `seed_used`, `inference_time_ms`
-
-### Video Generation
-
-```bash
-POST /api/video/generate
-```
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `prompt` | string | *required* | Text prompt |
-| `model_name` | string | `wan-t2v-1.3b` | Model: `wan-t2v-1.3b`, `wan-t2v-14b`, `wan-i2v-14b`, `hunyuan-video` |
-| `num_frames` | int | 33 | Frame count (16-1920) |
-| `fps` | int | 16 | Frames per second (8-30) |
-| `resolution` | string | `480p` | `480p` or `720p` |
-| `num_inference_steps` | int | 30 | Denoising steps (10-100) |
-| `guidance_scale` | float | 5.0 | CFG scale (0-20) |
-| `source_image_b64` | string | `null` | Base64 image for I2V |
-| `chunk_size` | int | 81 | Frames per chunk for long videos |
-| `chunk_overlap` | int | 20 | Overlap frames between chunks |
-
-**Response:** JSON with `job_id` — poll status via `/api/jobs/{job_id}`
-
-### Job Management
-
-```bash
-GET  /api/jobs/{job_id}           # Poll job status + ETA
-GET  /api/jobs/{job_id}/stream    # SSE real-time progress
-DELETE /api/jobs/{job_id}         # Cancel queued or running job
-GET  /api/jobs                    # List recent jobs
-GET  /api/queue/status            # Queue statistics
-POST /api/admin/queue/drain       # Cancel all jobs (requires Admin-Key header)
-```
-
-### Other Endpoints
-
-```bash
-GET  /health                      # System health, VRAM usage
-GET  /models                      # List all available models
-POST /loras/upload                # Upload LoRA adapter (.safetensors)
-GET  /loras                       # List available LoRAs
-```
-
----
-
-## 🧠 Supported Models
-
-| Model | Category | VRAM | Speed | Quality |
-|-------|----------|------|-------|---------|
-| `flux-1-dev` | Image | ~12GB (NF4) | 46s/image | ⭐⭐⭐⭐⭐ |
-| `sd3.5-large` | Image | ~10GB (NF4) | 35s/image | ⭐⭐⭐⭐ |
-| `realvisxl-v5` | Image | ~7GB | 25s/image | ⭐⭐⭐⭐ |
-| `wan-t2v-1.3b` | Text→Video | ~10GB | ~2min/clip | ⭐⭐⭐ |
-| `wan-t2v-14b` | Text→Video | ~18GB (NF4) | ~8min/clip | ⭐⭐⭐⭐⭐ |
-| `wan-i2v-14b` | Image→Video | ~18GB (NF4) | ~8min/clip | ⭐⭐⭐⭐⭐ |
-| `hunyuan-video` | Text→Video | ~15GB (NF4) | ~12min/clip | ⭐⭐⭐⭐ |
-
-*Timings measured on A100 40GB at default settings.*
-
----
-
-## 🎬 Long-Form Video Generation
-
-Generate videos up to **2 minutes** using chunked sliding-window inference:
-
-```bash
-curl -X POST http://localhost:8080/api/video/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "A drone shot flying over a tropical beach at golden hour",
-    "model_name": "wan-t2v-1.3b",
-    "num_frames": 480,
-    "chunk_size": 81,
-    "chunk_overlap": 20,
-    "fps": 16
-  }'
-```
-
-The system automatically:
-1. Splits into overlapping 81-frame chunks
-2. Generates each chunk sequentially
-3. Blends overlapping regions with cosine weighting
-4. Reports per-chunk progress via SSE
-
----
-
-## ⚙️ Configuration
-
-All settings are configured via environment variables. See [`.env.example`](.env.example) for the full list.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HF_TOKEN` | — | Hugging Face access token (required) |
-| `API_KEYS` | — | Comma-separated API keys for auth |
-| `ADMIN_API_KEY` | — | Admin key for queue drain endpoint |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins |
-| `CACHE_DIR` | `/mnt/hf-cache` | HDD model cache |
-| `CACHE_DIR_SSD` | `/app/model_cache` | SSD model cache (priority models) |
-| `OUTPUT_DIR` | `/mnt/outputs` | Generated file storage |
-| `OUTPUT_TTL_HOURS` | 24 | Auto-cleanup after N hours |
-| `HF_OFFLINE` | `false` | Skip HF network checks after caching |
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    FastAPI Server                     │
-├──────────────┬──────────────┬────────────────────────┤
-│ /generate    │ /api/video/* │ /api/jobs/*            │
-│ (sync image) │ (async video)│ (status/cancel/SSE)    │
-├──────────────┴──────┬───────┴────────────────────────┤
-│              GPU Lock Layer                          │
-│   _gpu_lock_image   │   _gpu_lock_video              │
-├─────────────────────┴────────────────────────────────┤
-│              Model Manager                           │
-│   Lazy load · VRAM swap · NF4 quantization           │
-│   SSD/HDD cache tiers · Single source of truth       │
-├──────────────────────────────────────────────────────┤
-│              Pipelines                               │
-│   FluxPipeline · WanPipeline · HunyuanVideo          │
-│   Chunked generation · Cosine blending · OOM recovery│
-├──────────────────────────────────────────────────────┤
-│              Job Queue                               │
-│   Priority queue · Cancel flag · ETA calculation     │
-│   Watchdog · SSE progress streaming                  │
-├──────────────────────────────────────────────────────┤
-│              Output Store                            │
-│   Disk space guard · TTL cleanup · File serving      │
-└──────────────────────────────────────────────────────┘
-```
-
----
-
-## 🧪 Testing
-
-### Remote Smoke Test (all models)
-```bash
-python tools/remote_smoke_test.py --server http://<ip>:8080
-```
-
-### Targeted Test (specific models)
-```bash
-python tools/test_hq.py --server http://<ip>:8080
-```
-
----
-
-## 📋 Development
-
-### Project Structure
-```
-app/
-├── main.py              # FastAPI app, all endpoints, job handler
-├── config.py            # Pydantic settings from environment
-├── schemas.py           # All API schemas (image + video + jobs)
-├── model_manager.py     # Model registry, loading, VRAM management
-├── pipeline.py          # Image generation pipeline
-├── job_queue.py         # Async job queue + cancellation + ETA
-├── output_store.py      # File storage + disk guard + cleanup
-├── security.py          # API key auth + rate limiting
-└── pipelines/
-    └── video_pipeline.py  # Video generation (T2V, I2V, chunked)
-```
-
-### Key Implementation Notes
-- **Schemas**: All in `schemas.py` — no separate schema files
-- **Cache tiers**: Controlled by `MultiModelManager.get_cache_dir()` — single source of truth
-- **GPU locks**: Separate for image (`_gpu_lock_image`) and video (`_gpu_lock_video`)
-- **Job cancellation**: `cancel_flag` checked in step callback → raises `InterruptedError`
-- **OOM**: Three-tier recovery — never jumps straight to CPU offload
-
----
-
-## 📄 License
-
-MIT License. See [LICENSE](LICENSE) for details.

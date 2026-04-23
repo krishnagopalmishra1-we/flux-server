@@ -15,6 +15,11 @@ from app.model_manager import MultiModelManager
 
 logger = logging.getLogger(__name__)
 
+
+def get_lora_dir() -> Path:
+    """Return the configured persistent image LoRA directory."""
+    return Path(get_settings().lora_dir)
+
 AUTO_NEGATIVE_BASE = (
     "low quality, worst quality, blurry, out of focus, pixelated, noisy, "
     "jpeg artifacts, watermark, text, logo, signature, extra fingers, "
@@ -131,11 +136,24 @@ class InferencePipeline:
             raise
 
     def get_available_loras(self) -> list[str]:
-        """List all .safetensors LoRA files in the loras/ directory."""
-        lora_dir = Path("loras")
+        """List all .safetensors LoRA files in the configured LoRA directory."""
+        lora_dir = get_lora_dir()
         if not lora_dir.exists():
             return []
-        return [f.name for f in lora_dir.glob("*.safetensors")]
+        return sorted(f.name for f in lora_dir.glob("*.safetensors") if f.is_file())
+
+    def lora_storage_stats(self) -> dict:
+        """Return basic diagnostics for the configured image LoRA directory."""
+        lora_dir = get_lora_dir()
+        files = list(lora_dir.glob("*.safetensors")) if lora_dir.exists() else []
+        total_bytes = sum(f.stat().st_size for f in files if f.is_file())
+        return {
+            "dir": str(lora_dir),
+            "exists": lora_dir.exists(),
+            "count": len(files),
+            "total_mb": round(total_bytes / (1024 * 1024), 1),
+            "files": sorted(f.name for f in files if f.is_file()),
+        }
 
     def _detect_lora_type(self, lora_path: Path) -> str:
         """Detect LoRA architecture type from key names."""
@@ -226,7 +244,7 @@ class InferencePipeline:
         if not lora_name or lora_name == "None":
             return current_model
 
-        lora_type = self._detect_lora_type(Path("loras") / lora_name)
+        lora_type = self._detect_lora_type(get_lora_dir() / lora_name)
         if lora_type == "full-checkpoint":
             return current_model
         if lora_type == "unknown":
@@ -262,7 +280,7 @@ class InferencePipeline:
             self.current_lora = lora_name
             return
 
-        lora_path = Path("loras") / lora_name
+        lora_path = get_lora_dir() / lora_name
         if not lora_path.exists():
             raise RuntimeError(f"LoRA file not found: {lora_path}")
 

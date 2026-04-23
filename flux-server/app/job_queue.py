@@ -182,6 +182,27 @@ class JobQueue:
 
         loop.call_soon_threadsafe(_put_all)
 
+    def _notify_terminal(self, job: Job) -> None:
+        """Notify SSE listeners that a job reached a terminal state."""
+        event = {
+            "progress": job.progress,
+            "status": job.status.value,
+            "result": job.result,
+            "error": job.error_message,
+        }
+        with self._listeners_lock:
+            listeners = list(self._progress_listeners.get(job.id, []))
+
+        def _put_all():
+            for q in listeners:
+                try:
+                    q.put_nowait(event)
+                except asyncio.QueueFull:
+                    pass
+
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(_put_all)
+
     def subscribe_progress(self, job_id: str) -> asyncio.Queue:
         """Subscribe to real-time progress updates for a job. Returns an asyncio.Queue."""
         q: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -306,6 +327,9 @@ class JobQueue:
             return False
         if job.status == JobStatus.QUEUED:
             job.status = JobStatus.CANCELLED
+            job.completed_at = time.time()
+            job.error_message = "Job cancelled before processing."
+            self._notify_terminal(job)
             logger.info(f"Job cancelled (was queued): {job_id[:8]}...")
             return True
         if job.status == JobStatus.PROCESSING:
@@ -419,18 +443,28 @@ class JobQueue:
                     result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
             else:
                 result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
+            if job.cancel_flag:
+                raise InterruptedError("Job cancelled by user request")
             job.result = result
             job.status = JobStatus.COMPLETED
             job.progress = 100.0
             job.completed_at = time.time()
+            self._notify_terminal(job)
             logger.info(
                 f"Job completed: {job.id[:8]}... "
                 f"(processing_time={job.processing_time_ms:.0f}ms)"
             )
+        except InterruptedError as e:
+            job.status = JobStatus.CANCELLED
+            job.error_message = str(e) or "Job cancelled by user request"
+            job.completed_at = time.time()
+            self._notify_terminal(job)
+            logger.info(f"Job cancelled: {job.id[:8]}...")
         except Exception as e:
             job.status = JobStatus.FAILED
             job.error_message = str(e)
             job.completed_at = time.time()
+            self._notify_terminal(job)
             logger.exception(f"Job failed: {job.id[:8]}... — {e}")
 
     @staticmethod

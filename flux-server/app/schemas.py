@@ -73,11 +73,11 @@ class VideoGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     model_name: str = Field("wan-t2v-1.3b")
     negative_prompt: Optional[str] = Field(None, max_length=1000)
-    num_frames: int = Field(33, ge=16, le=1920)
+    num_frames: int = Field(33, ge=16, le=480)
     fps: int = Field(16, ge=8, le=30)
-    # resolution: all models can receive 720p; the model itself determines quality.
-    # 480p = fastest, 540p = balanced, 720p = highest detail.
-    resolution: str = Field("720p", pattern=r"^(480p|540p|720p)$")
+    # A100-safe default: 480p short clips on Wan 1.3B. Higher tiers are
+    # explicitly model-gated below to avoid wasting scarce GPU/disk budget.
+    resolution: str = Field("480p", pattern=r"^(480p|540p|720p)$")
     # guidance_scale=5.0: WAN optimal for 1.3B. Higher values cause saturation artifacts.
     guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
     # 30 steps: good quality/speed balance for all models.
@@ -99,6 +99,58 @@ class VideoGenerateRequest(BaseModel):
     @classmethod
     def sanitize_prompt(cls, v: str) -> str:
         return "".join(c for c in v if c.isprintable())
+
+    @model_validator(mode="after")
+    def enforce_a100_limits(self) -> "VideoGenerateRequest":
+        limits = {
+            "wan-t2v-1.3b": {
+                "resolutions": {"480p"},
+                "max_frames": 240,
+                "max_steps": 40,
+                "max_chunk": 49,
+                "max_overlap": 16,
+            },
+            "wan-t2v-14b": {
+                "resolutions": {"480p", "540p", "720p"},
+                "max_frames": 129,
+                "max_steps": 50,
+                "max_chunk": 49,
+                "max_overlap": 16,
+            },
+            "wan-i2v-14b": {
+                "resolutions": {"480p", "540p", "720p"},
+                "max_frames": 81,
+                "max_steps": 50,
+                "max_chunk": 49,
+                "max_overlap": 16,
+            },
+            "hunyuan-video": {
+                "resolutions": {"540p", "720p"},
+                "max_frames": 129,
+                "max_steps": 60,
+                "max_chunk": 49,
+                "max_overlap": 16,
+            },
+        }
+        cfg = limits.get(self.model_name)
+        if cfg is None:
+            raise ValueError(f"Unsupported video model: {self.model_name}")
+        if self.source_image_b64 and self.model_name != "wan-i2v-14b":
+            raise ValueError("Image-to-video requires model_name='wan-i2v-14b'.")
+        if self.resolution not in cfg["resolutions"]:
+            allowed = ", ".join(sorted(cfg["resolutions"]))
+            raise ValueError(f"{self.model_name} supports resolution(s): {allowed}.")
+        if self.num_frames > cfg["max_frames"]:
+            raise ValueError(f"{self.model_name} is capped at {cfg['max_frames']} frames on A100 40GB.")
+        if self.num_inference_steps > cfg["max_steps"]:
+            raise ValueError(f"{self.model_name} is capped at {cfg['max_steps']} inference steps.")
+        if self.chunk_size > cfg["max_chunk"]:
+            raise ValueError(f"{self.model_name} is capped at chunk_size={cfg['max_chunk']}.")
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size.")
+        if self.chunk_overlap > cfg["max_overlap"]:
+            raise ValueError(f"{self.model_name} is capped at chunk_overlap={cfg['max_overlap']}.")
+        return self
 
 
 class VideoGenerateResponse(BaseModel):

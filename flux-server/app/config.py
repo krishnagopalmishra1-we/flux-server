@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     output_dir: str = "/mnt/outputs"
     output_ttl_hours: int = 24  # Auto-cleanup generated files after N hours
 
+    # LoRA storage. Keep these on persistent mounted storage so uploaded
+    # adapters survive container rebuilds and are visible to list/load paths.
+    lora_dir: str = "/mnt/hf-cache/loras"
+    video_lora_dir: str = "/mnt/hf-cache/video_loras"
+    max_lora_upload_mb: int = 1536
+
     # Job queue
     max_queue_size: int = 50
     max_jobs_per_user: int = 5
@@ -54,7 +60,7 @@ class Settings(BaseSettings):
     enable_video: bool = True
 
     # Video defaults
-    wan_default_variant: str = "14b"   # "1.3b" or "14b"
+    wan_default_variant: str = "1.3b"   # "1.3b" or "14b"
     default_video_fps: int = 16
     default_video_frames: int = 33
 

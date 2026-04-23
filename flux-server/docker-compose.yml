@@ -11,6 +11,8 @@ services:
       # WAN 14B (118G each) stays on HDD — too large for SSD.
       - model_cache_ssd:/app/model_cache
       - outputs:/mnt/outputs
+      # Legacy bind mounts kept for migration/inspection. Runtime LoRA paths
+      # default to /mnt/hf-cache/loras and /mnt/hf-cache/video_loras.
       - ./loras:/app/loras
       - ./video_loras:/app/video_loras
     environment:

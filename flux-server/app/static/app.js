@@ -1,7 +1,7 @@
-/* ═══════════════════════════════════════════════════════════
-   Neural Creation Studio — Multi-Modal AI Frontend
-   Image · Video · Music · Animation
-   ═══════════════════════════════════════════════════════════ */
+﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+   Neural Creation Studio â€” Multi-Modal AI Frontend
+   Image Â· Video
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 const RESOLUTION_PRESETS = [
   { label: "Square",    width: 1024, height: 1024 },
@@ -17,15 +17,61 @@ const VIDEO_FRAME_PRESETS = [
   { label: "5s",  frames: 81 },
 ];
 
-const GENRE_PILLS = [
-  "Pop","Rock","Hip Hop","Electronic","Jazz","R&B",
-  "Classical","Lo-fi","Ambient","Cinematic","Metal","Country",
+const SAMPLE_IMAGES = [
+  {
+    title: "Chrome Bloom",
+    prompt: "iridescent chrome orchid, sunlit studio, macro lens, crisp petals, editorial product photo",
+    src: "https://images.unsplash.com/photo-1541701494587-cb58502866ab?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Solar Atelier",
+    prompt: "bright futuristic fashion atelier, glass walls, golden hour, cinematic composition, ultra detailed",
+    src: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Neon Vista",
+    prompt: "wide angle neon valley at twilight, glowing river, dreamlike realism, atmospheric depth",
+    src: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Aurora Frame",
+    prompt: "cinematic portrait lit by aurora glass, soft rim light, luminous skin, high fashion editorial",
+    src: "https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=640&q=80",
+  },
 ];
+
+const IMAGE_STYLES = [
+  { id:"cinematic", label:"Cinematic", suffix:"cinematic lighting, dramatic composition, rich color grade, shallow depth of field" },
+  { id:"editorial", label:"Editorial", suffix:"high fashion editorial, polished studio light, premium magazine finish, refined texture" },
+  { id:"product", label:"Product", suffix:"luxury product photography, clean reflections, crisp material detail, bright commercial lighting" },
+  { id:"anime", label:"Anime", suffix:"anime key visual, expressive character design, clean line art, luminous color palette" },
+  { id:"realism", label:"Realism", suffix:"photorealistic, natural light, realistic skin and materials, high detail, professional camera" },
+  { id:"concept", label:"Concept Art", suffix:"high-end concept art, cinematic worldbuilding, atmospheric scale, intricate design language" },
+];
+
+const VIDEO_STYLES = [
+  { id:"cinematic", label:"Cinematic", suffix:"cinematic camera movement, soft depth of field, premium color grade, smooth motion" },
+  { id:"commercial", label:"Commercial", suffix:"bright commercial look, clean product reveal, controlled studio motion, polished lighting" },
+  { id:"dream", label:"Dreamlike", suffix:"ethereal movement, glowing atmosphere, graceful transitions, surreal cinematic mood" },
+  { id:"anime", label:"Anime Motion", suffix:"anime style motion, dynamic framing, expressive lighting, clean animated composition" },
+  { id:"documentary", label:"Documentary", suffix:"natural handheld camera feel, realistic movement, grounded lighting, observational detail" },
+];
+
+const TAB_PATHS = {
+  image: "/image",
+  video: "/video",
+  queue: "/queue",
+};
 
 const state = {
   activeTab: "image",
-  models: [], videoModels: [], musicModels: [], animModels: [],
+  models: [], videoModels: [],
   health: null, categories: [],
+  auth: {
+    apiKey: localStorage.getItem("ncs_api_key") || "",
+    required: false,
+    configuredKeyCount: 0,
+  },
   // Image
   history: [], loading: false, error: "", result: null, lightbox: null,
   loraUploadStatus: null,
@@ -33,6 +79,7 @@ const state = {
     prompt: "", negative_prompt: "", model_name: "flux-1-dev",
     width: 1024, height: 1024, num_inference_steps: 28,
     guidance_scale: 3.5, seed: "", lora_name: "None", lora_scale: 0.85,
+    style_id: "cinematic",
   },
   loras: ["None"],
   // Video
@@ -41,21 +88,11 @@ const state = {
     resolution: "480p", num_frames: 33, fps: 16,
     guidance_scale: 5.0, num_inference_steps: 30, seed: "",
     source_image_b64: null, lora_name: "None", lora_scale: 1.0,
+    style_id: "cinematic",
   },
   videoSourceName: "",
   videoLoras: ["None"],
   videoLoraUploadStatus: null,
-  // Music
-  musicForm: {
-    prompt: "", model_name: "audioldm2", duration_seconds: 30,
-    lyrics: "", genre: "", bpm: "", seed: "",
-  },
-  // Animation
-  animForm: {
-    model_name: "echomimic", expression_scale: 1.0, pose_style: 0,
-    use_enhancer: false, source_image_b64: null, audio_b64: null,
-  },
-  animSourceName: "", animAudioName: "",
   // Jobs
   jobs: [],
   queueStats: { queued: 0, processing: 0, completed: 0, failed: 0, total: 0 },
@@ -65,28 +102,41 @@ const state = {
 
 const root = document.getElementById("root");
 
-/* ─── Utilities ──────────────────────────────────── */
+/* â”€â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function escapeHtml(v) {
   return String(v ?? "")
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
-function formatMs(ms)  { return ms  ? `${(ms/1000).toFixed(2)}s` : "—"; }
-function formatDur(s)  { if (!s) return "—"; const m=Math.floor(s/60),r=Math.round(s%60); return m>0?`${m}m ${r}s`:`${r}s`; }
+function formatMs(ms)  { return ms  ? `${(ms/1000).toFixed(2)}s` : "-"; }
+function formatDur(s)  { if (!s) return "-"; const m=Math.floor(s/60),r=Math.round(s%60); return m>0?`${m}m ${r}s`:`${r}s`; }
 function activeModel() { return state.models.find(m=>m.name===state.form.model_name)||null; }
 function imageSrc(r)   { return r?.image_base64 ? `data:image/png;base64,${r.image_base64}` : ""; }
 
+function selectedImageStyle() { return IMAGE_STYLES.find(s=>s.id===state.form.style_id)||IMAGE_STYLES[0]; }
+function selectedVideoStyle() { return VIDEO_STYLES.find(s=>s.id===state.videoForm.style_id)||VIDEO_STYLES[0]; }
+function styledPrompt(prompt, style) {
+  const base = (prompt || "").trim();
+  if (!style?.suffix || !base) return base;
+  return `${base}, ${style.suffix}`;
+}
+function tabFromPath(path = window.location.pathname) {
+  if (path.startsWith("/video")) return "video";
+  if (path.startsWith("/queue")) return "queue";
+  return "image";
+}
+
 function statusBadge(status) {
   const map={
-    queued:     {cls:"badge-queued",    icon:"◎", text:"Queued"},
-    processing: {cls:"badge-processing",icon:"⟳", text:"Processing"},
-    completed:  {cls:"badge-done",      icon:"✓", text:"Done"},
-    failed:     {cls:"badge-fail",      icon:"✕", text:"Failed"},
-    cancelled:  {cls:"badge-cancel",    icon:"—", text:"Cancelled"},
+    queued:     {cls:"badge-queued",    icon:"", text:"Queued"},
+    processing: {cls:"badge-processing",icon:"", text:"Processing"},
+    completed:  {cls:"badge-done",      icon:"", text:"Done"},
+    failed:     {cls:"badge-fail",      icon:"", text:"Failed"},
+    cancelled:  {cls:"badge-cancel",    icon:"", text:"Cancelled"},
   };
   const s=map[status]||{cls:"",icon:"?",text:status};
-  return `<span class="status-badge ${s.cls}">${s.icon} ${s.text}</span>`;
+  return `<span class="status-badge ${s.cls}">${s.icon ? `${s.icon} ` : ""}${s.text}</span>`;
 }
 
 function fileToBase64(file) {
@@ -108,20 +158,41 @@ function progressBar(pct, status) {
     <div class="job-progress-label">${safe.toFixed(0)}%</div>`;
 }
 
-/* ─── API ─────────────────────────────────────────── */
+/* â”€â”€â”€ API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
-async function fetchJson(url, opts) {
-  const r = await fetch(url, opts);
+function authHeaders(headers = {}) {
+  const merged = {...headers};
+  if (state.auth.apiKey) merged["X-API-Key"] = state.auth.apiKey;
+  return merged;
+}
+
+async function fetchJson(url, opts = {}) {
+  const r = await fetch(url, {...opts, headers: authHeaders(opts.headers || {})});
   const d = await r.json();
   return { response: r, data: d };
 }
 
+async function loadAuthStatus() {
+  const before = JSON.stringify(state.auth);
+  try {
+    const { data } = await fetchJson("/api/auth/status");
+    state.auth.required = Boolean(data.api_key_required);
+    state.auth.configuredKeyCount = data.configured_key_count || 0;
+  } catch {
+    state.auth.required = false;
+    state.auth.configuredKeyCount = 0;
+  }
+  if (JSON.stringify(state.auth) !== before) render();
+}
+
 async function loadHealth() {
+  const before = state.health?.status || "";
   try {
     const { data } = await fetchJson("/health");
     state.health = data;
   } catch { state.health = null; }
-  render();
+  const after = state.health?.status || "";
+  if (before !== after) render();
 }
 
 async function loadModels() {
@@ -129,8 +200,6 @@ async function loadModels() {
     const { data } = await fetchJson("/models");
     state.models      = (data.models||[]).filter(m=>m.category==="image");
     state.videoModels = (data.models||[]).filter(m=>m.category==="video");
-    state.musicModels = (data.models||[]).filter(m=>m.category==="music");
-    state.animModels  = (data.models||[]).filter(m=>m.category==="animation");
     state.categories  = data.categories||[];
     const cur = data.current_model || state.models[0]?.name || "flux-1-dev";
     const info = state.models.find(m=>m.name===cur);
@@ -165,6 +234,10 @@ async function loadVideoLoras() {
 }
 
 async function loadJobs() {
+  const before = JSON.stringify({
+    jobs: state.jobs.map(j=>[j.job_id,j.status,j.progress,j.processing_time_ms,j.error_message]),
+    queue: state.queueStats,
+  });
   try {
     const { data } = await fetchJson("/api/jobs?limit=30");
     state.jobs = data.jobs||[];
@@ -173,9 +246,14 @@ async function loadJobs() {
     const { data } = await fetchJson("/api/queue/status");
     state.queueStats = data;
   } catch {}
+  const after = JSON.stringify({
+    jobs: state.jobs.map(j=>[j.job_id,j.status,j.progress,j.processing_time_ms,j.error_message]),
+    queue: state.queueStats,
+  });
+  return before !== after;
 }
 
-/* ─── Image ──────────────────────────────────────── */
+/* â”€â”€â”€ Image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function applyModel(name) {
   const info = state.models.find(m=>m.name===name);
@@ -202,7 +280,7 @@ async function uploadLora(file) {
   state.loraUploadStatus = "uploading"; render();
   const form = new FormData(); form.append("file", file);
   try {
-    const r = await fetch("/loras/upload", { method:"POST", body:form });
+    const r = await fetch("/loras/upload", { method:"POST", headers:authHeaders(), body:form });
     const d = await r.json();
     state.loraUploadStatus = r.ok ? "ok:"+d.filename : "err:"+(d?.detail||"Upload failed");
     if (r.ok) await loadLoras(state.form.model_name);
@@ -215,7 +293,7 @@ async function uploadVideoLora(file) {
   state.videoLoraUploadStatus = "uploading"; render();
   const form = new FormData(); form.append("file", file);
   try {
-    const r = await fetch("/api/video/loras/upload", { method:"POST", body:form });
+    const r = await fetch("/api/video/loras/upload", { method:"POST", headers:authHeaders(), body:form });
     const d = await r.json();
     state.videoLoraUploadStatus = r.ok ? "ok:"+d.filename : "err:"+(d?.detail||"Upload failed");
     if (r.ok) await loadVideoLoras();
@@ -227,8 +305,9 @@ async function uploadVideoLora(file) {
 async function onGenerate(e) {
   e.preventDefault();
   state.error=""; state.loading=true; render();
+  const style = selectedImageStyle();
   const payload = {
-    prompt: state.form.prompt,
+    prompt: styledPrompt(state.form.prompt, style),
     negative_prompt: state.form.negative_prompt||null,
     model_name: state.form.model_name,
     width: Number(state.form.width),
@@ -244,7 +323,11 @@ async function onGenerate(e) {
     const { response, data } = await fetchJson("/generate",{
       method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
     });
-    if (!response.ok) { state.error=data?.detail||"Generation failed."; }
+    if (!response.ok) {
+      state.error = response.status === 401
+        ? "Invalid or missing API key. Enter the server API key in the API Key field."
+        : (data?.detail||"Generation failed.");
+    }
     else {
       const r = {...data, model_name:state.form.model_name, prompt:state.form.prompt};
       state.result = r;
@@ -254,13 +337,14 @@ async function onGenerate(e) {
   state.loading=false; render(); loadHealth();
 }
 
-/* ─── Video ──────────────────────────────────────── */
+/* â”€â”€â”€ Video â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 async function onVideoGenerate(e) {
   e.preventDefault(); state.error="";
   const f = state.videoForm;
+  const style = selectedVideoStyle();
   const payload = {
-    prompt: f.prompt,
+    prompt: styledPrompt(f.prompt, style),
     negative_prompt: f.negative_prompt||null,
     model_name: f.model_name,
     resolution: f.resolution,
@@ -277,59 +361,19 @@ async function onVideoGenerate(e) {
     const { response, data } = await fetchJson("/api/video/generate",{
       method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
     });
-    if (!response.ok) { state.error=data?.detail||"Video generation failed."; render(); return; }
+    if (!response.ok) {
+      state.error = response.status === 401
+        ? "Invalid or missing API key. Enter the server API key in the API Key field."
+        : (data?.detail||"Video generation failed.");
+      render(); return;
+    }
     startJobSSE(data.job_id);
   } catch { state.error="Request failed. Check server/network."; }
   render();
   await loadJobs(); render();
 }
 
-/* ─── Music ──────────────────────────────────────── */
-
-async function onMusicGenerate(e) {
-  e.preventDefault(); state.error="";
-  const f = state.musicForm;
-  const payload = {
-    prompt: f.prompt, model_name: f.model_name,
-    duration_seconds: Number(f.duration_seconds),
-    lyrics: f.lyrics||null, genre: f.genre||null,
-    bpm: f.bpm===""?null:Number(f.bpm),
-    seed: f.seed===""?null:Number(f.seed),
-  };
-  try {
-    const { response, data } = await fetchJson("/api/music/generate",{
-      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
-    });
-    if (!response.ok) { state.error=data?.detail||"Music generation failed."; render(); return; }
-    startJobSSE(data.job_id);
-  } catch { state.error="Request failed. Check server/network."; }
-  render(); await loadJobs(); render();
-}
-
-/* ─── Animation ──────────────────────────────────── */
-
-async function onAnimGenerate(e) {
-  e.preventDefault(); state.error="";
-  const f = state.animForm;
-  if (!f.source_image_b64||!f.audio_b64) {
-    state.error="Please upload both a face image and an audio file."; render(); return;
-  }
-  const payload = {
-    model_name: f.model_name, source_image_b64: f.source_image_b64,
-    audio_b64: f.audio_b64, expression_scale: Number(f.expression_scale),
-    pose_style: Number(f.pose_style), use_enhancer: f.use_enhancer,
-  };
-  try {
-    const { response, data } = await fetchJson("/api/animation/generate",{
-      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
-    });
-    if (!response.ok) { state.error=data?.detail||"Animation failed."; render(); return; }
-    startJobSSE(data.job_id);
-  } catch { state.error="Request failed. Check server/network."; }
-  render(); await loadJobs(); render();
-}
-
-/* ─── SSE Job Streaming ──────────────────────────── */
+/* â”€â”€â”€ SSE Job Streaming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function startJobSSE(jobId) {
   if (state._sseConnections[jobId]) return;
@@ -366,7 +410,7 @@ function startJobSSE(jobId) {
   };
 }
 
-/* ─── Polling fallback ───────────────────────────── */
+/* â”€â”€â”€ Polling fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const _pollingTimers = {};
 
@@ -399,16 +443,64 @@ async function cancelJob(jobId) {
   } catch {}
 }
 
-function setTab(t) { state.activeTab=t; state.error=""; render(); }
+function setTab(t, opts = {}) {
+  const next = TAB_PATHS[t] ? t : "image";
+  state.activeTab = next;
+  state.error = "";
+  const nextPath = TAB_PATHS[next];
+  if (opts.push !== false && window.location.pathname !== nextPath) {
+    history.pushState({tab: next}, "", nextPath);
+  }
+  render();
+  if (opts.scroll !== false) {
+    requestAnimationFrame(()=>document.querySelector(".page-content")?.scrollIntoView({behavior:"smooth", block:"start"}));
+  }
+}
 
-/* ═══════════════════════════════════════════════════
+function useSamplePrompt(prompt) {
+  state.activeTab = "image";
+  state.form.prompt = prompt;
+  state.error = "";
+  if (window.location.pathname !== TAB_PATHS.image) {
+    history.pushState({tab: "image"}, "", TAB_PATHS.image);
+  }
+  render();
+  const form = document.getElementById("generate-form");
+  const promptEl = document.getElementById("prompt");
+  form?.scrollIntoView({behavior:"smooth", block:"start"});
+  if (form) {
+    form.classList.add("focus-pulse");
+    setTimeout(()=>form.classList.remove("focus-pulse"), 900);
+  }
+  promptEl?.focus({preventScroll:true});
+}
+
+function renderSampleShowcase() {
+  return `
+    <div class="hero-showcase">
+      ${SAMPLE_IMAGES.map((sample, i)=>`
+        <button type="button" class="sample-tile sample-${i+1}" data-sample-prompt="${escapeHtml(sample.prompt)}" title="${escapeHtml(sample.title)}">
+          <img src="${sample.src}" alt="${escapeHtml(sample.title)}" loading="lazy" />
+          <span>${escapeHtml(sample.title)}</span>
+        </button>`).join("")}
+    </div>`;
+}
+
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    RENDER
-   ═══════════════════════════════════════════════════ */
+   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 function render() {
   const cur = activeModel();
   const curImg = imageSrc(state.result);
   const tab = state.activeTab;
+  const focused = document.activeElement;
+  const focusSnapshot = focused && root.contains(focused) && focused.id ? {
+    id: focused.id,
+    start: focused.selectionStart,
+    end: focused.selectionEnd,
+    direction: focused.selectionDirection,
+  } : null;
 
   root.innerHTML = `
     <div class="app-shell">
@@ -419,49 +511,75 @@ function render() {
         <!-- HERO -->
         <section class="hero premium-card">
           <div class="hero-copy">
-            <div class="eyebrow">Neural Creation Studio</div>
-            <h1>Multi-modal AI creation platform.</h1>
-            <p class="subtitle">Generate images, videos, music, and animations — all from one interface.</p>
+            <div class="brand-lockup">
+              <span class="brand-mark">H</span>
+              <div><div class="eyebrow">Hyperforge AI</div><strong>Creative Studio</strong></div>
+            </div>
+            <h1>Forge luminous images and motion.</h1>
+            <p class="subtitle">A brighter workspace for image generation, LoRA experiments, motion tests, and polished creative previews.</p>
+            <div class="hero-actions">
+              <button type="button" class="hero-action primary" data-sample-prompt="${escapeHtml(SAMPLE_IMAGES[0].prompt)}">Try a Sample</button>
+              <a class="hero-action" href="/queue" data-tab="queue">View Queue</a>
+            </div>
           </div>
-          <div class="hero-status premium-card inner-card">
+          <div class="hero-aside">
+            ${renderSampleShowcase()}
+            <div class="hero-status premium-card inner-card">
             <div class="status-top">
               <span class="dot ${state.health?.status==="healthy"?"ok":""}"></span>
-              <span>${escapeHtml(state.health?.status==="healthy"?"System Ready":(state.health?.status||"Starting…"))}</span>
+              <span>${escapeHtml(state.health?.status==="healthy"?"System Ready":(state.health?.status||"Starting..."))}</span>
             </div>
             <div class="status-grid">
-              <div><label>Active Model</label><strong>${escapeHtml(state.health?.current_model||"—")}</strong></div>
-              <div><label>Queue</label><strong>${state.queueStats.queued} queued · ${state.queueStats.processing} running</strong></div>
-              <div><label>VRAM</label><strong>${state.health?.vram_used_gb!=null?`${state.health.vram_used_gb.toFixed(1)} / ${state.health.vram_total_gb?.toFixed(0)} GB`:"—"}</strong></div>
+              <div><label>Studio</label><strong>${state.health?.status==="healthy"?"Ready":"Warming up"}</strong></div>
+              <div><label>Queue</label><strong>${state.queueStats.queued + state.queueStats.processing} active</strong></div>
+              <div><label>Styles</label><strong>${IMAGE_STYLES.length + VIDEO_STYLES.length} presets</strong></div>
+            </div>
+            ${state.auth.required ? `
+              <div class="auth-field">
+                <label for="api-key">API Key</label>
+                <input id="api-key" type="password" autocomplete="off" placeholder="Required for image generation" value="${escapeHtml(state.auth.apiKey)}" />
+              </div>` : ""}
             </div>
           </div>
         </section>
 
         <!-- TAB NAV -->
         <nav class="tab-nav">
-          <button class="tab-btn ${tab==="image"?"active":""}" data-tab="image"><span class="tab-icon">◆</span> Image</button>
-          <button class="tab-btn ${tab==="video"?"active":""}" data-tab="video"><span class="tab-icon">▶</span> Video</button>
-          <button class="tab-btn ${tab==="music"?"active":""}" data-tab="music"><span class="tab-icon">♫</span> Music</button>
-          <button class="tab-btn ${tab==="animation"?"active":""}" data-tab="animation"><span class="tab-icon">◎</span> Animation</button>
-          <button class="tab-btn ${tab==="queue"?"active":""}" data-tab="queue"><span class="tab-icon">☰</span> Jobs
+          <a class="tab-btn ${tab==="image"?"active":""}" href="/image" data-tab="image">Image</a>
+          <a class="tab-btn ${tab==="video"?"active":""}" href="/video" data-tab="video">Video</a>
+          <a class="tab-btn ${tab==="queue"?"active":""}" href="/queue" data-tab="queue">Jobs
             <span class="job-count">${state.jobs.filter(j=>j.status==="queued"||j.status==="processing").length||""}</span>
-          </button>
+          </a>
         </nav>
 
-        ${tab==="image"     ? renderImageTab(cur,curImg) : ""}
-        ${tab==="video"     ? renderVideoTab()           : ""}
-        ${tab==="music"     ? renderMusicTab()           : ""}
-        ${tab==="animation" ? renderAnimationTab()       : ""}
-        ${tab==="queue"     ? renderQueueTab()           : ""}
+        <main class="page-content" data-page="${escapeHtml(tab)}">
+          ${tab==="image"     ? renderImageTab(cur,curImg) : ""}
+          ${tab==="video"     ? renderVideoTab()           : ""}
+          ${tab==="queue"     ? renderQueueTab()           : ""}
+        </main>
 
-        ${state.error ? `<div class="global-error">⚠ ${escapeHtml(state.error)}</div>` : ""}
+        ${state.error ? `<div class="global-error">${escapeHtml(state.error)}</div>` : ""}
       </div>
       ${state.lightbox ? `<div class="lightbox" id="lightbox"><img src="${state.lightbox}" alt="Preview" /></div>` : ""}
     </div>`;
 
   bindEvents();
+  restoreFocus(focusSnapshot);
 }
 
-/* ─── IMAGE TAB ──────────────────────────────────── */
+function restoreFocus(snapshot) {
+  if (!snapshot) return;
+  const el = document.getElementById(snapshot.id);
+  if (!el) return;
+  el.focus({preventScroll:true});
+  if (typeof el.setSelectionRange === "function" && snapshot.start != null && snapshot.end != null) {
+    try {
+      el.setSelectionRange(snapshot.start, snapshot.end, snapshot.direction || "none");
+    } catch {}
+  }
+}
+
+/* â”€â”€â”€ IMAGE TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function renderImageTab(currentModel, currentImage) {
   return `
@@ -478,7 +596,18 @@ function renderImageTab(currentModel, currentImage) {
         <div class="section-heading"><div><div class="eyebrow">Image Generation</div><h2>Compose</h2></div></div>
 
         <div class="field"><label>Prompt</label>
-          <textarea id="prompt" placeholder="Cinematic portrait, neon cityscape, hyperrealistic..." required>${escapeHtml(state.form.prompt)}</textarea></div>
+          <textarea id="prompt" placeholder="Cinematic portrait, neon cityscape, hyperrealistic..." maxlength="2000" spellcheck="true" required>${escapeHtml(state.form.prompt)}</textarea>
+          <div class="prompt-tools">
+            <span>${escapeHtml(state.form.prompt.length)} / 2000</span>
+            ${SAMPLE_IMAGES.slice(0,3).map(sample=>`<button type="button" data-sample-prompt="${escapeHtml(sample.prompt)}">${escapeHtml(sample.title)}</button>`).join("")}
+          </div>
+        </div>
+        <div class="field"><label>Style</label>
+          <div class="style-grid">${IMAGE_STYLES.map(style=>`
+            <button type="button" class="style-card ${state.form.style_id===style.id?"active":""}" data-image-style="${escapeHtml(style.id)}">
+              <strong>${escapeHtml(style.label)}</strong><span>${escapeHtml(style.suffix)}</span>
+            </button>`).join("")}</div>
+        </div>
         <div class="field"><label>Negative Prompt</label>
           <textarea id="negative_prompt" class="compact" placeholder="blurry, low quality, watermark">${escapeHtml(state.form.negative_prompt)}</textarea></div>
 
@@ -490,10 +619,10 @@ function renderImageTab(currentModel, currentImage) {
               <select id="lora_name">${state.loras.map(l=>`<option value="${escapeHtml(l)}" ${state.form.lora_name===l?"selected":""}>${escapeHtml(l)}</option>`).join("")}</select>
               <label class="upload-lora-btn ${state.loraUploadStatus==="uploading"?"uploading":""}" title="Upload .safetensors LoRA">
                 <input type="file" id="lora-file-input" accept=".safetensors" style="display:none" />
-                ${state.loraUploadStatus==="uploading"?"…":"⬆"}
+                ${state.loraUploadStatus==="uploading"?"...":"Upload"}
               </label>
             </div>
-            ${state.loraUploadStatus&&state.loraUploadStatus!=="uploading"?`<div class="lora-upload-msg ${state.loraUploadStatus.startsWith("ok")?"ok":"err"}">${escapeHtml(state.loraUploadStatus.startsWith("ok:")?"✓ Uploaded: "+state.loraUploadStatus.slice(3):state.loraUploadStatus.slice(4))}</div>`:""}
+            ${state.loraUploadStatus&&state.loraUploadStatus!=="uploading"?`<div class="lora-upload-msg ${state.loraUploadStatus.startsWith("ok")?"ok":"err"}">${escapeHtml(state.loraUploadStatus.startsWith("ok:")?"Uploaded: "+state.loraUploadStatus.slice(3):state.loraUploadStatus.slice(4))}</div>`:""}
           </div>
           <div class="field"><label>LoRA Scale</label>
             <input id="lora_scale" type="number" min="0" max="2" step="0.05" value="${escapeHtml(state.form.lora_scale)}" /></div>
@@ -502,7 +631,7 @@ function renderImageTab(currentModel, currentImage) {
         <div class="field"><label>Resolution</label>
           <div class="preset-row">${RESOLUTION_PRESETS.map(p=>{
             const a=state.form.width===p.width&&state.form.height===p.height;
-            return `<button type="button" class="preset-chip ${a?"active":""}" data-width="${p.width}" data-height="${p.height}">${escapeHtml(p.label)}<small>${p.width}×${p.height}</small></button>`;
+            return `<button type="button" class="preset-chip ${a?"active":""}" data-width="${p.width}" data-height="${p.height}">${escapeHtml(p.label)}<small>${p.width}x${p.height}</small></button>`;
           }).join("")}</div></div>
 
         <div class="field-group four-col">
@@ -514,7 +643,7 @@ function renderImageTab(currentModel, currentImage) {
 
         <div class="field-group two-col align-end">
           <div class="field"><label>Seed</label><input id="seed" value="${escapeHtml(state.form.seed)}" placeholder="blank = random" /></div>
-          <button class="primary-button" type="submit" ${state.loading?"disabled":""}>${state.loading?"Generating…":"Generate Image"}</button>
+          <button class="primary-button" type="submit" ${state.loading?"disabled":""}>${state.loading?"Generating...":"Generate Image"}</button>
         </div>
 
         ${currentModel?`<div class="model-note"><strong>${escapeHtml(currentModel.name)}</strong><span>${escapeHtml(currentModel.description||"")}</span></div>`:""}
@@ -525,19 +654,19 @@ function renderImageTab(currentModel, currentImage) {
           <div class="section-heading compact-heading">
             <div><div class="eyebrow">Output</div><h2>Preview</h2></div>
             <div class="output-actions">
-              ${currentImage&&!state.loading?`<button type="button" class="download-btn" id="download-btn">⬇ Download</button>`:""}
+              ${currentImage&&!state.loading?`<button type="button" class="download-btn" id="download-btn">Download</button>`:""}
               <div class="metric-inline"><span>${escapeHtml(state.result?.model_name||state.health?.current_model||"No model")}</span></div>
             </div>
           </div>
           <div class="canvas" id="canvas">
-            ${state.loading?`<div class="loading-spinner"><div class="spinner"></div><span>Generating image…</span></div>`
+            ${state.loading?`<div class="loading-spinner"><div class="spinner"></div><span>Generating image...</span></div>`
               :currentImage?`<img src="${currentImage}" alt="Generated" />`
               :`<span class="empty-state">Your image will appear here.</span>`}
           </div>
           <div class="result-grid">
             <div class="result-card"><label>Seed</label><strong>${escapeHtml(state.result?.seed_used??"-")}</strong></div>
             <div class="result-card"><label>Time</label><strong>${escapeHtml(formatMs(state.result?.inference_time_ms))}</strong></div>
-            <div class="result-card"><label>Size</label><strong>${state.result?`${state.form.width}×${state.form.height}`:"—"}</strong></div>
+            <div class="result-card"><label>Size</label><strong>${state.result?`${state.form.width}x${state.form.height}`:"-"}</strong></div>
           </div>
         </div>
 
@@ -556,7 +685,7 @@ function renderImageTab(currentModel, currentImage) {
     </div>`;
 }
 
-/* ─── VIDEO TAB ──────────────────────────────────── */
+/* â”€â”€â”€ VIDEO TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function renderVideoTab() {
   const f = state.videoForm;
@@ -569,21 +698,28 @@ function renderVideoTab() {
         <div class="section-heading"><div><div class="eyebrow">Video Generation</div><h2>Text to Video</h2></div></div>
 
         <div class="field"><label>Prompt</label>
-          <textarea id="v-prompt" placeholder="A camera slowly pans across a futuristic city at golden hour…" required>${escapeHtml(f.prompt)}</textarea></div>
+          <textarea id="v-prompt" placeholder="A camera slowly pans across a futuristic city at golden hour..." required>${escapeHtml(f.prompt)}</textarea></div>
+
+        <div class="field"><label>Motion Style</label>
+          <div class="style-grid video-style-grid">${VIDEO_STYLES.map(style=>`
+            <button type="button" class="style-card ${f.style_id===style.id?"active":""}" data-video-style="${escapeHtml(style.id)}">
+              <strong>${escapeHtml(style.label)}</strong><span>${escapeHtml(style.suffix)}</span>
+            </button>`).join("")}</div>
+        </div>
 
         <div class="field"><label>Negative Prompt</label>
           <textarea id="v-neg" class="compact" placeholder="blurry, static, low motion, worst quality">${escapeHtml(f.negative_prompt||"")}</textarea></div>
 
         <div class="field"><label>Model</label>
           <select id="v-model">${state.videoModels.map(m=>`
-            <option value="${escapeHtml(m.name)}" ${f.model_name===m.name?"selected":""}>${escapeHtml(m.name)} — ${escapeHtml(m.description||"")}</option>`).join("")}
+            <option value="${escapeHtml(m.name)}" ${f.model_name===m.name?"selected":""}>${escapeHtml(m.name)} - ${escapeHtml(m.description||"")}</option>`).join("")}
           </select></div>
 
         <div class="field-group two-col">
           <div class="field"><label>Resolution</label>
             <select id="v-resolution">
-              <option value="480p" ${f.resolution==="480p"?"selected":""}>480p (848×480)</option>
-              <option value="720p" ${f.resolution==="720p"?"selected":""}>720p (1280×720)</option>
+              <option value="480p" ${f.resolution==="480p"?"selected":""}>480p (848x480)</option>
+              <option value="720p" ${f.resolution==="720p"?"selected":""}>720p (1280x720)</option>
             </select></div>
           <div class="field"><label>FPS</label>
             <select id="v-fps">
@@ -611,10 +747,10 @@ function renderVideoTab() {
             <select id="v-lora">${state.videoLoras.map(l=>`<option value="${escapeHtml(l)}" ${f.lora_name===l?"selected":""}>${escapeHtml(l)}</option>`).join("")}</select>
             <label class="upload-lora-btn ${state.videoLoraUploadStatus==="uploading"?"uploading":""}" title="Upload video LoRA (.safetensors)">
               <input type="file" id="v-lora-file-input" accept=".safetensors" style="display:none" />
-              ${state.videoLoraUploadStatus==="uploading"?"…":"⬆"}
+              ${state.videoLoraUploadStatus==="uploading"?"...":"Upload"}
             </label>
           </div>
-          ${state.videoLoraUploadStatus&&state.videoLoraUploadStatus!=="uploading"?`<div class="lora-upload-msg ${state.videoLoraUploadStatus.startsWith("ok")?"ok":"err"}">${escapeHtml(state.videoLoraUploadStatus.startsWith("ok:")?"✓ Uploaded: "+state.videoLoraUploadStatus.slice(3):state.videoLoraUploadStatus.slice(4))}</div>`:""}
+          ${state.videoLoraUploadStatus&&state.videoLoraUploadStatus!=="uploading"?`<div class="lora-upload-msg ${state.videoLoraUploadStatus.startsWith("ok")?"ok":"err"}">${escapeHtml(state.videoLoraUploadStatus.startsWith("ok:")?"Uploaded: "+state.videoLoraUploadStatus.slice(3):state.videoLoraUploadStatus.slice(4))}</div>`:""}
         </div>
         <div class="field"><label>LoRA Scale</label>
           <input id="v-lora-scale" type="number" min="0" max="2" step="0.05" value="${f.lora_scale}" /></div>
@@ -623,18 +759,18 @@ function renderVideoTab() {
           <div class="dropzone" id="v-dropzone">
             <input type="file" id="v-source-img" accept="image/*" style="display:none" />
             ${f.source_image_b64
-              ?`<div class="dropzone-preview"><img src="data:image/png;base64,${f.source_image_b64}" alt="Source" /><button type="button" class="dropzone-clear" id="v-clear-img">✕</button></div>`
-              :`<div class="dropzone-label" id="v-dropzone-label"><span class="dropzone-icon">🖼</span><span>Drop or click to upload source image</span></div>`}
+              ?`<div class="dropzone-preview"><img src="data:image/png;base64,${f.source_image_b64}" alt="Source" /><button type="button" class="dropzone-clear" id="v-clear-img">x</button></div>`
+              :`<div class="dropzone-label" id="v-dropzone-label"><span>Drop or click to upload source image</span></div>`}
           </div></div>
 
-        <button class="primary-button" type="submit">▶ Generate Video</button>
+        <button class="primary-button" type="submit">Generate Video</button>
       </form>
 
       <section class="output-column">
         <div class="premium-card output-panel">
           <div class="section-heading compact-heading">
             <div><div class="eyebrow">Output</div><h2>Video Preview</h2></div>
-            ${latestVideoJob?.result?.video_url?`<a class="download-btn" href="${latestVideoJob.result.video_url}" download>⬇ Download</a>`:""}
+            ${latestVideoJob?.result?.video_url?`<a class="download-btn" href="${latestVideoJob.result.video_url}" download>Download</a>`:""}
           </div>
           ${renderVideoResult(latestVideoJob)}
         </div>
@@ -652,13 +788,13 @@ function renderVideoResult(job) {
       </div>
       <div class="result-grid">
         <div class="result-card"><label>Duration</label><strong>${formatDur(job.result.duration_seconds)}</strong></div>
-        <div class="result-card"><label>Frames</label><strong>${job.result.num_frames||"—"}</strong></div>
+        <div class="result-card"><label>Frames</label><strong>${job.result.num_frames||"-"}</strong></div>
         <div class="result-card"><label>Time</label><strong>${formatMs(job.result.inference_time_ms)}</strong></div>
       </div>`;
   }
   if (job.status==="processing"||job.status==="queued") {
     const pct = job.progress||0;
-    const label = job.status==="queued"?"Waiting in queue…":`Generating video… ${pct.toFixed(0)}%`;
+    const label = job.status==="queued"?"Waiting in queue...":`Generating video... ${pct.toFixed(0)}%`;
     return `
       <div class="canvas">
         <div class="loading-spinner">
@@ -674,140 +810,14 @@ function renderVideoResult(job) {
   return `<div class="canvas"><span class="empty-state">Submit a prompt to generate a video.</span></div>`;
 }
 
-/* ─── MUSIC TAB ──────────────────────────────────── */
-
-function renderMusicTab() {
-  const f = state.musicForm;
-  const latest = state.jobs.find(j=>j.job_type==="music"&&
-    (j.status==="completed"||j.status==="processing"||j.status==="queued"));
-
-  return `
-    <div class="layout">
-      <form class="premium-card control-panel" id="music-form">
-        <div class="section-heading"><div><div class="eyebrow">Music Generation</div><h2>Create Music</h2></div></div>
-
-        <div class="field"><label>Prompt</label>
-          <textarea id="m-prompt" placeholder="Upbeat electronic track with synth pads and deep bass…" required>${escapeHtml(f.prompt)}</textarea></div>
-
-        <div class="field"><label>Model</label>
-          <select id="m-model">${state.musicModels.map(m=>`
-            <option value="${escapeHtml(m.name)}" ${f.model_name===m.name?"selected":""}>${escapeHtml(m.name)} — ${escapeHtml(m.description||"")}</option>`).join("")}
-          </select></div>
-
-        <div class="field"><label>Genre</label>
-          <div class="style-row">${GENRE_PILLS.map(g=>`
-            <button type="button" class="style-chip ${f.genre===g?"active":""}" data-genre="${escapeHtml(g)}">${escapeHtml(g)}</button>`).join("")}</div></div>
-
-        <div class="field-group three-col">
-          <div class="field"><label>Duration (s)</label><input id="m-duration" type="number" min="5" max="300" value="${f.duration_seconds}" /></div>
-          <div class="field"><label>BPM</label><input id="m-bpm" type="number" min="40" max="240" value="${escapeHtml(f.bpm)}" placeholder="auto" /></div>
-          <div class="field"><label>Seed</label><input id="m-seed" value="${escapeHtml(f.seed)}" placeholder="random" /></div>
-        </div>
-
-        ${f.model_name==="ace-step"?`
-          <div class="field"><label>Lyrics (ACE-Step)</label>
-            <textarea id="m-lyrics" class="compact" placeholder="[Verse]&#10;Your lyrics here…&#10;[Chorus]&#10;The hook…">${escapeHtml(f.lyrics)}</textarea></div>`:""}
-
-        <button class="primary-button" type="submit">♫ Generate Music</button>
-      </form>
-
-      <section class="output-column">
-        <div class="premium-card output-panel">
-          <div class="section-heading compact-heading">
-            <div><div class="eyebrow">Output</div><h2>Audio Preview</h2></div>
-            ${latest?.result?.audio_url?`<a class="download-btn" href="${latest.result.audio_url}" download>⬇ Download</a>`:""}
-          </div>
-          ${latest?.status==="completed"&&latest.result?.audio_url?`
-            <div class="audio-container">
-              <audio controls src="${latest.result.audio_url}"></audio>
-              <div class="result-grid" style="margin-top:14px">
-                <div class="result-card"><label>Duration</label><strong>${formatDur(latest.result.duration_seconds)}</strong></div>
-                <div class="result-card"><label>Sample Rate</label><strong>${latest.result.sample_rate||"—"} Hz</strong></div>
-                <div class="result-card"><label>Time</label><strong>${formatMs(latest.result.inference_time_ms)}</strong></div>
-              </div>
-            </div>`
-          :latest?.status==="processing"||latest?.status==="queued"?`
-            <div class="canvas"><div class="loading-spinner"><div class="spinner"></div>
-              <span>${latest.status==="queued"?"Waiting in queue…":"Generating music…"}</span>
-              ${progressBar(latest.progress, latest.status)}</div></div>`
-          :`<div class="canvas"><span class="empty-state">Submit a prompt to generate music.</span></div>`}
-        </div>
-        ${renderRecentJobs("music")}
-      </section>
-    </div>`;
-}
-
-/* ─── ANIMATION TAB ──────────────────────────────── */
-
-function renderAnimationTab() {
-  const f = state.animForm;
-  const latest = state.jobs.find(j=>j.job_type==="animation"&&
-    (j.status==="completed"||j.status==="processing"||j.status==="queued"));
-
-  return `
-    <div class="layout">
-      <form class="premium-card control-panel" id="anim-form">
-        <div class="section-heading"><div><div class="eyebrow">Animation</div><h2>Talking Head</h2></div></div>
-
-        <div class="field"><label>Model</label>
-          <select id="a-model">${state.animModels.map(m=>`
-            <option value="${escapeHtml(m.name)}" ${f.model_name===m.name?"selected":""}>${escapeHtml(m.name)} — ${escapeHtml(m.description||"")}</option>`).join("")}
-          </select></div>
-
-        <div class="field"><label>Face Image</label>
-          <div class="dropzone" id="a-img-dropzone">
-            <input type="file" id="a-source-img" accept="image/*" style="display:none" />
-            ${f.source_image_b64
-              ?`<div class="dropzone-preview"><img src="data:image/png;base64,${f.source_image_b64}" alt="Face" /><button type="button" class="dropzone-clear" id="a-clear-img">✕</button></div>`
-              :`<div class="dropzone-label"><span class="dropzone-icon">👤</span><span>Upload a clear face photo</span></div>`}
-          </div></div>
-
-        <div class="field"><label>Audio File</label>
-          <div class="dropzone" id="a-audio-dropzone">
-            <input type="file" id="a-source-audio" accept="audio/*,.wav,.mp3,.ogg" style="display:none" />
-            ${f.audio_b64
-              ?`<div class="dropzone-file"><span>🎵 ${escapeHtml(state.animAudioName||"Audio loaded")}</span><button type="button" class="dropzone-clear" id="a-clear-audio">✕</button></div>`
-              :`<div class="dropzone-label"><span class="dropzone-icon">🎙</span><span>Upload speech or song audio (WAV/MP3)</span></div>`}
-          </div></div>
-
-        <div class="field-group two-col">
-          <div class="field"><label>Expression Scale</label><input id="a-expr" type="number" min="0.1" max="3.0" step="0.1" value="${f.expression_scale}" /></div>
-          <div class="field"><label>Pose Style</label><input id="a-pose" type="number" min="0" max="46" value="${f.pose_style}" /></div>
-        </div>
-
-        <button class="primary-button" type="submit" ${!f.source_image_b64||!f.audio_b64?"disabled":""}>◎ Generate Animation</button>
-      </form>
-
-      <section class="output-column">
-        <div class="premium-card output-panel">
-          <div class="section-heading compact-heading">
-            <div><div class="eyebrow">Output</div><h2>Animation Preview</h2></div>
-            ${latest?.result?.video_url?`<a class="download-btn" href="${latest.result.video_url}" download>⬇ Download</a>`:""}
-          </div>
-          ${latest?.status==="completed"&&latest.result?.video_url?`
-            <div class="video-container"><video controls autoplay loop playsinline src="${latest.result.video_url}"></video></div>
-            <div class="result-grid">
-              <div class="result-card"><label>Duration</label><strong>${formatDur(latest.result.duration_seconds)}</strong></div>
-              <div class="result-card"><label>Time</label><strong>${formatMs(latest.result.inference_time_ms)}</strong></div>
-            </div>`
-          :latest?.status==="processing"||latest?.status==="queued"?`
-            <div class="canvas"><div class="loading-spinner"><div class="spinner"></div>
-              <span>${latest.status==="queued"?"Waiting…":"Generating animation…"}</span></div></div>`
-          :`<div class="canvas"><span class="empty-state">Upload a face image and audio to animate.</span></div>`}
-        </div>
-        ${renderRecentJobs("animation")}
-      </section>
-    </div>`;
-}
-
-/* ─── QUEUE TAB ──────────────────────────────────── */
+/* â”€â”€â”€ QUEUE TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function renderQueueTab() {
   const s = state.queueStats;
   return `
     <div class="queue-layout">
       <div class="premium-card queue-stats-card">
-        <div class="section-heading"><div><div class="eyebrow">System Status</div><h2>Job Queue</h2></div></div>
+        <div class="section-heading"><div><div class="eyebrow">Studio Queue</div><h2>Creation Activity</h2></div></div>
         <div class="queue-stats-grid">
           <div class="queue-stat"><div class="queue-stat-value">${s.queued}</div><div class="queue-stat-label">Queued</div></div>
           <div class="queue-stat processing"><div class="queue-stat-value">${s.processing}</div><div class="queue-stat-label">Processing</div></div>
@@ -830,8 +840,8 @@ function renderQueueTab() {
                   ${job.status==="queued"?`<button class="job-cancel-btn" data-cancel="${escapeHtml(job.job_id)}">Cancel</button>`:""}
                 </div>
                 ${job.status==="processing"?progressBar(job.progress,"processing"):""}
-                ${job.status==="completed"&&job.result?.video_url?`<a class="job-result-link" href="${job.result.video_url}" target="_blank">▶ View Video</a>`:""}
-                ${job.status==="completed"&&job.result?.audio_url?`<a class="job-result-link" href="${job.result.audio_url}" target="_blank">♫ Play Audio</a>`:""}
+                ${job.status==="completed"&&job.result?.video_url?`<a class="job-result-link" href="${job.result.video_url}" target="_blank">View Video</a>`:""}
+                ${job.status==="completed"&&job.result?.audio_url?`<a class="job-result-link" href="${job.result.audio_url}" target="_blank">Play Audio</a>`:""}
                 ${job.status==="failed"&&job.error_message?`<div class="job-error">${escapeHtml(job.error_message)}</div>`:""}
               </div>`).join("")}
           </div>`}
@@ -839,7 +849,7 @@ function renderQueueTab() {
     </div>`;
 }
 
-/* ─── Shared: recent jobs panel ──────────────────── */
+/* â”€â”€â”€ Shared: recent jobs panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function renderRecentJobs(type) {
   const jobs = state.jobs.filter(j=>j.job_type===type).slice(0,5);
@@ -857,20 +867,50 @@ function renderRecentJobs(type) {
               ${job.status==="queued"?`<button class="job-cancel-btn" data-cancel="${escapeHtml(job.job_id)}">Cancel</button>`:""}
             </div>
             ${job.status==="processing"?progressBar(job.progress,"processing"):""}
-            ${job.status==="completed"&&job.result?.video_url?`<a class="job-result-link" href="${job.result.video_url}" target="_blank">▶ Play</a>`:""}
-            ${job.status==="completed"&&job.result?.audio_url?`<a class="job-result-link" href="${job.result.audio_url}" target="_blank">♫ Play</a>`:""}
+            ${job.status==="completed"&&job.result?.video_url?`<a class="job-result-link" href="${job.result.video_url}" target="_blank">Play</a>`:""}
+            ${job.status==="completed"&&job.result?.audio_url?`<a class="job-result-link" href="${job.result.audio_url}" target="_blank">Play</a>`:""}
             ${job.status==="failed"?`<div class="job-error">${escapeHtml(job.error_message||"Failed")}</div>`:""}
           </div>`).join("")}
       </div>
     </div>`;
 }
 
-/* ─── Event Binding ──────────────────────────────── */
+/* â”€â”€â”€ Event Binding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function bindEvents() {
+  bindInput("api-key", v=>{
+    state.auth.apiKey = v.trim();
+    localStorage.setItem("ncs_api_key", state.auth.apiKey);
+  });
+
   // Tab navigation
   document.querySelectorAll("[data-tab]").forEach(btn=>{
-    btn.addEventListener("click", ()=>setTab(btn.dataset.tab));
+    btn.addEventListener("click", e=>{
+      e.preventDefault();
+      setTab(btn.dataset.tab);
+    });
+  });
+
+  document.querySelectorAll("[data-sample-prompt]").forEach(btn=>{
+    btn.addEventListener("click", ()=>useSamplePrompt(btn.dataset.samplePrompt));
+  });
+
+  document.querySelectorAll("[data-image-style]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.form.style_id = btn.dataset.imageStyle;
+      render();
+      document.getElementById("generate-form")?.classList.add("focus-pulse");
+      setTimeout(()=>document.getElementById("generate-form")?.classList.remove("focus-pulse"), 700);
+    });
+  });
+
+  document.querySelectorAll("[data-video-style]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.videoForm.style_id = btn.dataset.videoStyle;
+      render();
+      document.getElementById("video-form")?.classList.add("focus-pulse");
+      setTimeout(()=>document.getElementById("video-form")?.classList.remove("focus-pulse"), 700);
+    });
   });
 
   // Model cards
@@ -886,11 +926,6 @@ function bindEvents() {
   // Video frame presets
   document.querySelectorAll("[data-vframes]").forEach(btn=>{
     btn.addEventListener("click", ()=>{ state.videoForm.num_frames=Number(btn.dataset.vframes); render(); });
-  });
-
-  // Genre chips
-  document.querySelectorAll("[data-genre]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{ state.musicForm.genre=state.musicForm.genre===btn.dataset.genre?"":btn.dataset.genre; render(); });
   });
 
   // Image form sync
@@ -980,42 +1015,6 @@ function bindEvents() {
   const vf = document.getElementById("video-form");
   if (vf) vf.addEventListener("submit", onVideoGenerate);
 
-  // Music form sync
-  bindInput("m-prompt",  v=>state.musicForm.prompt=v);
-  bindInput("m-model",   v=>state.musicForm.model_name=v);
-  bindInput("m-duration",v=>state.musicForm.duration_seconds=v);
-  bindInput("m-bpm",     v=>state.musicForm.bpm=v);
-  bindInput("m-seed",    v=>state.musicForm.seed=v);
-  bindInput("m-lyrics",  v=>state.musicForm.lyrics=v);
-  const mf = document.getElementById("music-form");
-  if (mf) mf.addEventListener("submit", onMusicGenerate);
-
-  // Animation form
-  bindInput("a-model",v=>state.animForm.model_name=v);
-  bindInput("a-expr", v=>state.animForm.expression_scale=v);
-  bindInput("a-pose", v=>state.animForm.pose_style=v);
-
-  const aSrcInput = document.getElementById("a-source-img");
-  const aDrop = document.getElementById("a-img-dropzone");
-  if (aSrcInput) aSrcInput.addEventListener("change", async e=>{
-    if(e.target.files[0]) { state.animForm.source_image_b64=await fileToBase64(e.target.files[0]); render(); }
-  });
-  if (aDrop) aDrop.addEventListener("click", e=>{ if(!e.target.classList.contains("dropzone-clear")) document.getElementById("a-source-img")?.click(); });
-  const aClearImg = document.getElementById("a-clear-img");
-  if (aClearImg) aClearImg.addEventListener("click", e=>{ e.stopPropagation(); state.animForm.source_image_b64=null; render(); });
-
-  const aAudioInput = document.getElementById("a-source-audio");
-  const aAudioDrop = document.getElementById("a-audio-dropzone");
-  if (aAudioInput) aAudioInput.addEventListener("change", async e=>{
-    if(e.target.files[0]) { state.animForm.audio_b64=await fileToBase64(e.target.files[0]); state.animAudioName=e.target.files[0].name; render(); }
-  });
-  if (aAudioDrop) aAudioDrop.addEventListener("click", e=>{ if(!e.target.classList.contains("dropzone-clear")) document.getElementById("a-source-audio")?.click(); });
-  const aClearAudio = document.getElementById("a-clear-audio");
-  if (aClearAudio) aClearAudio.addEventListener("click", e=>{ e.stopPropagation(); state.animForm.audio_b64=null; state.animAudioName=""; render(); });
-
-  const af = document.getElementById("anim-form");
-  if (af) af.addEventListener("submit", onAnimGenerate);
-
   // Job cancel buttons
   document.querySelectorAll("[data-cancel]").forEach(btn=>{
     btn.addEventListener("click", ()=>cancelJob(btn.dataset.cancel));
@@ -1029,18 +1028,25 @@ function bindInput(id, setter) {
   el.addEventListener("change", ()=>setter(el.value));
 }
 
-/* ─── Init ───────────────────────────────────────── */
+/* â”€â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 async function init() {
+  state.activeTab = tabFromPath();
   render();
-  await Promise.all([loadHealth(), loadModels(), loadJobs()]);
+  await Promise.all([loadAuthStatus(), loadHealth(), loadModels(), loadJobs()]);
   render();
   // Periodic refresh
   setInterval(loadHealth, 15000);
-  setInterval(async ()=>{ await loadJobs(); render(); }, 8000);
+  setInterval(async ()=>{ if (await loadJobs()) render(); }, 8000);
   // Re-connect any active jobs on page reload
   state.jobs.filter(j=>j.status==="processing"||j.status==="queued")
     .forEach(j=>startJobSSE(j.job_id));
 }
+
+window.addEventListener("popstate", ()=>{
+  state.activeTab = tabFromPath();
+  state.error = "";
+  render();
+});
 
 init();
