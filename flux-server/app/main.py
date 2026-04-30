@@ -87,12 +87,11 @@ def get_user_id(request: Request) -> str:
     host = request.client.host if request.client else "unknown"
     return hashlib.sha256(f"app_salt_{host}".encode()).hexdigest()[:16]
 
-async def _handle_video_job(job) -> dict:
+def _handle_video_job(job) -> dict:
     """Process a video generation job with real-time progress reporting.
 
-    The job queue executes this handler in its worker thread while holding the
-    shared GPU lock, so blocking model load/inference work cannot race with
-    image generation.
+    Called by job_queue._run_handler_in_thread inside asyncio.to_thread, so it
+    is already off the main event loop — no nested event loop needed.
     """
     payload = job.payload
 
@@ -107,7 +106,7 @@ async def _handle_video_job(job) -> dict:
         job_queue.set_progress(job.id, pct)
 
     if payload.get("source_image_b64"):
-        return await video_pipeline.generate_image_to_video(
+        return video_pipeline.generate_image_to_video(
             source_image_b64=payload["source_image_b64"],
             prompt=payload.get("prompt", ""),
             model_name=job.model_name,
@@ -123,7 +122,7 @@ async def _handle_video_job(job) -> dict:
             job=job,
         )
     elif job.model_name == "hunyuan-video":
-        return await video_pipeline.generate_hunyuan_video(
+        return video_pipeline.generate_hunyuan_video(
             prompt=payload["prompt"],
             resolution=payload.get("resolution", "720p"),
             num_frames=payload.get("num_frames", 129),
@@ -141,7 +140,7 @@ async def _handle_video_job(job) -> dict:
 
         # Auto-detect: use chunked generation for long videos
         if num_frames > chunk_size:
-            return await video_pipeline.generate_long_video(
+            return video_pipeline.generate_long_video(
                 prompt=payload["prompt"],
                 model_name=job.model_name,
                 negative_prompt=payload.get("negative_prompt", ""),
@@ -160,7 +159,7 @@ async def _handle_video_job(job) -> dict:
                 job=job,
             )
         else:
-            return await video_pipeline.generate_text_to_video(
+            return video_pipeline.generate_text_to_video(
                 prompt=payload["prompt"],
                 model_name=job.model_name,
                 negative_prompt=payload.get("negative_prompt", ""),

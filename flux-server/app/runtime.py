@@ -15,6 +15,7 @@ class GpuRuntimeCoordinator:
     """
 
     def __init__(self) -> None:
+        # Single GPU lock — image and video paths each unload the other's model, so concurrent access causes OOM or CUDA assertion failures.
         self.lock = asyncio.Lock()
 
     @asynccontextmanager

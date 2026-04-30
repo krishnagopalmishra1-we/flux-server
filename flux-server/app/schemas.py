@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any
 import uuid
 
+from app.config import get_settings as _get_settings
+_cfg = _get_settings()
+
 
 # ═══════════════════════════════════════════════════
 #  IMAGE SCHEMAS
@@ -73,8 +76,8 @@ class VideoGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     model_name: str = Field("wan-t2v-1.3b")
     negative_prompt: Optional[str] = Field(None, max_length=1000)
-    num_frames: int = Field(33, ge=16, le=480)
-    fps: int = Field(16, ge=8, le=30)
+    num_frames: int = Field(_cfg.default_video_frames, ge=16, le=480)
+    fps: int = Field(_cfg.default_video_fps, ge=8, le=30)
     # A100-safe default: 480p short clips on Wan 1.3B. Higher tiers are
     # explicitly model-gated below to avoid wasting scarce GPU/disk budget.
     resolution: str = Field("480p", pattern=r"^(480p|540p|720p)$")
@@ -146,10 +149,19 @@ class VideoGenerateRequest(BaseModel):
             raise ValueError(f"{self.model_name} is capped at {cfg['max_steps']} inference steps.")
         if self.chunk_size > cfg["max_chunk"]:
             raise ValueError(f"{self.model_name} is capped at chunk_size={cfg['max_chunk']}.")
-        if self.chunk_overlap >= self.chunk_size:
-            raise ValueError("chunk_overlap must be smaller than chunk_size.")
         if self.chunk_overlap > cfg["max_overlap"]:
             raise ValueError(f"{self.model_name} is capped at chunk_overlap={cfg['max_overlap']}.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_video_request(self) -> "VideoGenerateRequest":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        if self.source_image_b64 and self.model_name != "wan-i2v-14b":
+            raise ValueError(
+                "source_image_b64 requires model_name='wan-i2v-14b'. "
+                "Text-to-video models do not accept an input image."
+            )
         return self
 
 

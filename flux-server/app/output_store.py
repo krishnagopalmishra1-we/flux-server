@@ -213,7 +213,7 @@ def get_output_store() -> OutputStore:
     """Get or create the OutputStore singleton."""
     global _output_store_instance
     if _output_store_instance is None:
-        _output_store_instance = OutputStore()
+        _output_store_instance = OutputStore(ttl_hours=get_settings().output_ttl_hours)
     return _output_store_instance
 
 

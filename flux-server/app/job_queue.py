@@ -13,7 +13,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +95,7 @@ class Job:
 
 
 # Type alias for job handler functions
-JobHandler = Callable[[Job], Coroutine[Any, Any, Dict[str, Any]]]
+JobHandler = Callable[[Job], Dict[str, Any]]
 
 
 class JobQueue:
@@ -374,6 +376,8 @@ class JobQueue:
                     if (now - getattr(job, 'last_updated_at', job.started_at or now)) > timeout_seconds:
                         logger.error(f"Watchdog: Job {job.id} stalled! No progress for {timeout_seconds}s.")
                         job.status = JobStatus.FAILED
+                        job.cancel_flag = True
+                        logger.warning(f"Watchdog cancelled job {job.id} — cancel_flag set; handler result will be ignored.")
                         job.error_message = f"Job stalled (watchdog timeout after {timeout_seconds}s without progress)."
                         job.completed_at = now
                         
@@ -443,9 +447,10 @@ class JobQueue:
                     result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
             else:
                 result = await asyncio.to_thread(self._run_handler_in_thread, handler, job)
-            if job.cancel_flag:
-                raise InterruptedError("Job cancelled by user request")
             job.result = result
+            if job.status in (JobStatus.FAILED, JobStatus.CANCELLED) or job.cancel_flag:
+                logger.info(f"Job {job.id} handler returned but status is already {job.status} — skipping COMPLETED write.")
+                return
             job.status = JobStatus.COMPLETED
             job.progress = 100.0
             job.completed_at = time.time()
@@ -469,8 +474,8 @@ class JobQueue:
 
     @staticmethod
     def _run_handler_in_thread(handler: JobHandler, job: Job) -> Dict[str, Any]:
-        """Execute async handler in an isolated event loop inside a worker thread."""
-        return asyncio.run(handler(job))
+        """Execute handler directly — already running in a worker thread off the event loop."""
+        return handler(job)
 
     def _cleanup_expired(self) -> None:
         """Remove completed/failed jobs older than TTL and prune their listener entries."""
@@ -492,5 +497,9 @@ class JobQueue:
             logger.info(f"Cleaned up {len(expired_ids)} expired jobs")
 
 
-# Module-level singleton
-job_queue = JobQueue()
+# Module-level singleton — limits driven by config so .env overrides take effect.
+_cfg = get_settings()
+job_queue = JobQueue(
+    max_queue_size=_cfg.max_queue_size,
+    max_per_user=_cfg.max_jobs_per_user,
+)

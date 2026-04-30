@@ -467,7 +467,7 @@ class VideoPipeline:
     #  Chunked Long-Video Generation
     # ──────────────────────────────────────────────
 
-    async def generate_long_video(
+    def generate_long_video(
         self,
         prompt: str,
         model_name: str = "wan-t2v-1.3b",
@@ -529,8 +529,15 @@ class VideoPipeline:
 
         for chunk_idx in range(num_chunks):
             chunk_start = chunk_idx * step
-            chunk_end = min(chunk_start + chunk_size, total_frames)
-            chunk_frames = chunk_end - chunk_start
+            requested_end = min(chunk_start + chunk_size, total_frames)
+            requested_frames = requested_end - chunk_start
+            # Pad final chunk to at least 16 frames so WAN pipeline shape constraints are met.
+            # Extra tail frames are trimmed after stitching, preserving exact output length.
+            if chunk_idx < num_chunks - 1:
+                chunk_frames = chunk_size
+            else:
+                chunk_frames = max(16, requested_frames)
+            chunk_frames = min(chunk_frames, chunk_size)
 
             # Per-chunk progress: map each chunk into its portion of 10-90%
             chunk_pct_start = 10.0 + (chunk_idx / num_chunks) * 80.0
@@ -540,7 +547,10 @@ class VideoPipeline:
                 start=chunk_pct_start, end=chunk_pct_end, job=job,
             )
 
-            logger.info(f"  Chunk {chunk_idx + 1}/{num_chunks}: frames {chunk_start}-{chunk_end} ({chunk_frames} frames)")
+            logger.info(
+                f"  Chunk {chunk_idx + 1}/{num_chunks}: start={chunk_start}, "
+                f"requested={requested_frames}, generated={chunk_frames}"
+            )
 
             try:
                 with torch.inference_mode():
@@ -620,7 +630,7 @@ class VideoPipeline:
     #  Inference — Text to Video
     # ──────────────────────────────────────────────
 
-    async def generate_text_to_video(
+    def generate_text_to_video(
         self,
         prompt: str,
         model_name: str = "wan-t2v-1.3b",
@@ -681,62 +691,32 @@ class VideoPipeline:
                     callback_on_step_end=_step_cb,
                 )
         except torch.cuda.OutOfMemoryError:
-            # Tiered OOM recovery: try reducing parameters before falling back to CPU offload.
+            logger.warning(
+                f"OOM during T2V generation (model={model_name}, frames={num_frames}, "
+                f"steps={num_inference_steps}, res={width}x{height}). "
+                "Retrying with CPU offload — generation parameters unchanged."
+            )
             torch.cuda.empty_cache()
             gc.collect()
             output = None
-
-            # Tier 1: reduce inference steps
-            if num_inference_steps > 20:
-                reduced_steps = max(20, num_inference_steps - 10)
-                logger.warning(f"OOM during T2V — retrying with reduced steps ({num_inference_steps} → {reduced_steps})...")
-                try:
-                    with torch.inference_mode():
-                        output = self._pipe(
-                            prompt=prompt, negative_prompt=negative_prompt or None,
-                            height=height, width=width, num_frames=num_frames,
-                            guidance_scale=guidance_scale, num_inference_steps=reduced_steps,
-                            generator=generator, callback_on_step_end=_step_cb,
-                        )
-                except torch.cuda.OutOfMemoryError:
-                    torch.cuda.empty_cache()
-                    gc.collect()
-
-            # Tier 2: reduce frame count
-            if output is None and num_frames > 16:
-                reduced_frames = max(16, num_frames // 2)
-                logger.warning(f"OOM during T2V — retrying with reduced frames ({num_frames} → {reduced_frames})...")
-                try:
-                    with torch.inference_mode():
-                        output = self._pipe(
-                            prompt=prompt, negative_prompt=negative_prompt or None,
-                            height=height, width=width, num_frames=reduced_frames,
-                            guidance_scale=guidance_scale, num_inference_steps=max(20, num_inference_steps - 10),
-                            generator=generator, callback_on_step_end=_step_cb,
-                        )
-                except torch.cuda.OutOfMemoryError:
-                    torch.cuda.empty_cache()
-                    gc.collect()
-
-            # Tier 3: last resort — CPU offload
+            if hasattr(self._pipe, "enable_sequential_cpu_offload"):
+                self._pipe.enable_sequential_cpu_offload()
+            try:
+                with torch.inference_mode():
+                    output = self._pipe(
+                        prompt=prompt, negative_prompt=negative_prompt or None,
+                        height=height, width=width, num_frames=num_frames,
+                        guidance_scale=guidance_scale, num_inference_steps=num_inference_steps,
+                        generator=generator, callback_on_step_end=_step_cb,
+                    )
+            except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
+                logger.error(f"T2V OOM all retries failed: {retry_err}. Unloading pipeline.")
+                self.unload()
+                torch.cuda.empty_cache()
+                gc.collect()
+                raise
             if output is None:
-                logger.warning("OOM during T2V — enabling sequential CPU offload (last resort)...")
-                if hasattr(self._pipe, "enable_sequential_cpu_offload"):
-                    self._pipe.enable_sequential_cpu_offload()
-                try:
-                    with torch.inference_mode():
-                        output = self._pipe(
-                            prompt=prompt, negative_prompt=negative_prompt or None,
-                            height=height, width=width, num_frames=num_frames,
-                            guidance_scale=guidance_scale, num_inference_steps=num_inference_steps,
-                            generator=generator, callback_on_step_end=_step_cb,
-                        )
-                except (torch.cuda.OutOfMemoryError, RuntimeError) as retry_err:
-                    logger.error(f"T2V OOM all retries failed: {retry_err}. Unloading pipeline.")
-                    self.unload()
-                    torch.cuda.empty_cache()
-                    gc.collect()
-                    raise
+                raise RuntimeError("Video generation failed after all fallback attempts.")
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         if progress_callback:
@@ -773,7 +753,7 @@ class VideoPipeline:
     #  Inference — Image to Video
     # ──────────────────────────────────────────────
 
-    async def generate_image_to_video(
+    def generate_image_to_video(
         self,
         source_image_b64: str,
         prompt: str = "",
@@ -883,7 +863,7 @@ class VideoPipeline:
     #  Inference — HunyuanVideo
     # ──────────────────────────────────────────────
 
-    async def generate_hunyuan_video(
+    def generate_hunyuan_video(
         self,
         prompt: str,
         resolution: str = "720p",
@@ -1007,14 +987,12 @@ class VideoPipeline:
                 fps=fps,
                 codec="libx264",
                 output_params=["-crf", "18", "-preset", "fast", "-pix_fmt", "yuv420p"],
+                macro_block_size=None,
             )
             for frame in frames:
-                if isinstance(frame, _PILImage.Image):
-                    arr = np.array(frame)
-                else:
-                    arr = np.array(frame)
-                    if arr.dtype != np.uint8:
-                        arr = (arr * 255).clip(0, 255).astype(np.uint8)
+                arr = np.array(frame)
+                if arr.dtype != np.uint8:
+                    arr = (arr * 255).clip(0, 255).astype(np.uint8)
                 writer.append_data(arr)
             writer.close()
             writer = None

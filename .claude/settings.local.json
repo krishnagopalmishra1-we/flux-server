@@ -22,7 +22,28 @@
       "Bash(ls flux-server/app/pipeline.py)",
       "Bash(ls smoke_test_full.sh smoke_test_v2.sh)",
       "Bash(python3 -c \"import sys,json; jobs=json.load\\(sys.stdin\\); [print\\(j.get\\('job_id',''\\)[:12], j.get\\('status'\\), j.get\\('model_name'\\), j.get\\('progress',0\\)\\) for j in jobs]\")",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(type\\(d\\)\\); print\\(str\\(d\\)[:300]\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(type\\(d\\)\\); print\\(str\\(d\\)[:300]\\)\")",
+      "Bash(aws sts *)",
+      "Bash(aws configure *)",
+      "PowerShell(aws sts get-caller-identity --output json 2>&1)",
+      "PowerShell(aws configure list 2>&1)",
+      "PowerShell(Get-Command aws -ErrorAction SilentlyContinue; Get-Item \"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\" -ErrorAction SilentlyContinue; Get-Item \"$env:USERPROFILE\\\\.aws\\\\credentials\" -ErrorAction SilentlyContinue; Get-Item \"$env:USERPROFILE\\\\.aws\\\\config\" -ErrorAction SilentlyContinue)",
+      "PowerShell($aws = \"C:\\\\Program Files\\\\Amazon\\\\AWSCLIV2\\\\aws.exe\"; & $aws sts get-caller-identity --output json 2>&1; Write-Host \"---CREDS---\"; Get-Content \"$env:USERPROFILE\\\\.aws\\\\credentials\" -ErrorAction SilentlyContinue; Write-Host \"---CONFIG---\"; Get-Content \"$env:USERPROFILE\\\\.aws\\\\config\" -ErrorAction SilentlyContinue)",
+      "PowerShell(gcloud compute instances list --filter=\"name=flux-a100-preemptible\" --format=\"table\\(name,status,zone\\)\" 2>&1)",
+      "PowerShell(gcloud compute instances start flux-a100-preemptible --zone=us-central1-a 2>&1)",
+      "Bash(git commit -m ' *)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --command=\"cd /opt/flux-server/flux-server && git branch --show-current && git log --oneline -3\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"cd /opt/flux-server/flux-server && git branch --show-current && git log --oneline -3\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"echo hello && whoami && ls /opt/ 2>&1\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"git -C /opt/flux-server branch --show-current; git -C /opt/flux-server log --oneline -3; sudo docker ps --format 'table {{.Names}}|{{.Status}}'\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"sudo git -C /opt/flux-server branch --show-current && sudo git -C /opt/flux-server log --oneline -3\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"sudo git -C /opt/flux-server fetch origin && sudo git -C /opt/flux-server checkout codex/hyperforge-runtime-hardening && sudo git -C /opt/flux-server pull origin codex/hyperforge-runtime-hardening && sudo git -C /opt/flux-server log --oneline -4\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"cd /opt/flux-server/flux-server && sudo git stash && sudo git checkout codex/hyperforge-runtime-hardening && sudo git pull origin codex/hyperforge-runtime-hardening && sudo git log --oneline -4\" 2>&1)",
+      "PowerShell(gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a --strict-host-key-checking=no --command=\"cd /opt/flux-server/flux-server && sudo docker compose up --build -d 2>&1\" 2>&1)",
+      "Bash(git -C \"c:/Users/Lenovo/.codex/worktrees/36c7/Flux_Lora\" status --short)",
+      "Bash(git -C \"c:/Users/Lenovo/.codex/worktrees/36c7/Flux_Lora\" log --oneline -5)",
+      "Bash(git -C \"c:/Users/Lenovo/.codex/worktrees/36c7/Flux_Lora\" diff -- flux-server/app/job_queue.py flux-server/app/main.py flux-server/app/output_store.py flux-server/app/pipelines/video_pipeline.py flux-server/app/runtime.py flux-server/app/schemas.py)",
+      "Bash(git -C \"c:/Users/Lenovo/.codex/worktrees/36c7/Flux_Lora\" diff -- .claude/settings.local.json)"
     ]
   }
 }
