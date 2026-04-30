@@ -147,7 +147,7 @@ def _handle_video_job(job) -> dict:
                 resolution=payload.get("resolution", "480p"),
                 total_frames=num_frames,
                 chunk_size=chunk_size,
-                chunk_overlap=payload.get("chunk_overlap", 16),
+                chunk_overlap=payload.get("chunk_overlap", 8),
                 fps=payload.get("fps", 16),
                 guidance_scale=payload.get("guidance_scale", 5.0),
                 num_inference_steps=payload.get("num_inference_steps", 30),
