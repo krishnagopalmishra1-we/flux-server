@@ -10,7 +10,7 @@
 - Video generation at `POST /api/video/generate`
 - Job polling, queue state, and SSE progress under `/api/jobs/*`
 - LoRA listing and upload endpoints for image and video adapters
-- The Hyperforge AI web UI at `/`, `/image`, `/video`, and `/queue`
+- The Hyperforge AI web UI at `/`, `/image`, `/video`, `/queue`, and `/library`
 
 The service is designed for fixed constraints:
 
@@ -107,9 +107,13 @@ curl http://localhost:8080/api/auth/status
 The web UI is branded as Hyperforge AI and is intentionally public-facing:
 
 - No internal GPU or VRAM details in normal UI flows
-- Real routes for `/image`, `/video`, and `/queue`
+- Routes: `/image`, `/video`, `/queue`, `/library`
+- **Quality presets** on the image tab: Draft · Balanced · HQ · Ultra (one-click steps + CFG)
+- **15s video preset** added alongside 1s, 2s, 3s, 5s
+- **12 Unsplash sample images** across landscape, portrait, abstract, sci-fi, fashion categories
+- **Library tab** — persistent grid/list gallery of all generated images and videos with filtering (All / Image / Video), download, delete, and lightbox preview
+- Tab transition animations (fade + slide), shimmer skeleton loader
 - Predefined image and video styles
-- Sample prompts and richer visuals
 
 Internal health details remain available through API endpoints for debugging.
 
@@ -167,6 +171,13 @@ Current safe defaults:
 - `GET /api/jobs/{job_id}/stream`
 - `DELETE /api/jobs/{job_id}`
 - `GET /api/queue/status`
+
+### Library
+
+- `GET /api/library?type=all|image|video&limit=200` — paginated list of all saved generations, newest first
+- `DELETE /api/library/{id}` — delete an item and its file from disk
+
+Generated images are automatically saved to `outputs/image/` and indexed in `outputs/library_meta.json`. Videos were already persisted; they are now cross-referenced in the same index so both types appear in the Library tab.
 
 ## Repository Notes
 

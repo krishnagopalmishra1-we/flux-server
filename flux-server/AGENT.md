@@ -1,6 +1,6 @@
 # AGENT.md - Hyperforge AI Runtime Notes
 
-> Last updated: 2026-04-23
+> Last updated: 2026-05-09
 > This file is the shortest reliable handoff for future agents touching `flux-server/`.
 
 ## Canonical App
@@ -82,9 +82,13 @@ If uploaded LoRAs are "missing", the first thing to check is whether the VM bind
 
 The current UI is public-facing Hyperforge AI:
 
-- Routes: `/image`, `/video`, `/queue`
+- Routes: `/image`, `/video`, `/queue`, `/library`
 - Predefined image and video style chips
-- Sample prompt actions
+- **Quality presets** on image tab: Draft (15st/cfg3) · Balanced (25st/cfg3.5) · HQ (35st/cfg5) · Ultra (50st/cfg7)
+- **15s video preset** (240 frames) added
+- **12 Unsplash sample images** across multiple visual categories
+- **Library tab**: persistent gallery of all generated images and videos. Filter by type, grid/list view, lightbox, download, delete.
+- Tab transition animations (`pageIn` keyframe), shimmer skeleton
 - Internal metrics like VRAM are hidden from the public UI
 
 Recent bug fixes:
@@ -93,6 +97,16 @@ Recent bug fixes:
 - Reduced polling-driven rerenders to avoid constant flicker
 - Removed visible mojibake from user-facing strings
 - Queue navigation now changes the URL instead of only switching internal state
+
+## Library / Output Store
+
+`app/output_store.py` now persists generated images to disk:
+
+- `"image"` added to `SUBDIRS` — images land in `outputs/image/`
+- `library_meta.json` in `outputs/` tracks all generations (images + videos) with prompt, model, seed, timestamp
+- New methods: `record_entry()`, `list_library()`, `delete_entry()`
+- `GET /api/library` and `DELETE /api/library/{id}` wired in `main.py`
+- Images are saved best-effort; generation response is not blocked if save fails
 
 ## Files Worth Reading First
 

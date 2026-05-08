@@ -43,12 +43,21 @@ Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss
 
 ---
 
-## Status: NATIVE HQ DEPLOYED
-**Last Update: 2026-04-18**
-- **Issue**: 1.3B was forced to 480p and had 'black jumps' on 15s videos.
-- **Fix**: Removed 480p clamp in `main.py`. Implemented 16-frame **Cosine Wave Blending** in `video_pipeline.py`.
-- **Outcome**: 15s 720p generations are now smooth and detailed.
-- **Infrastructure**: All changes pushed and VM stopping.
+## Status: UI ENHANCED + LIBRARY ADDED
+**Last Update: 2026-05-09**
+
+### Previous (2026-04-18): Native HQ Deployed
+- Removed 480p clamp, added cosine-wave blending → smooth 15s 720p on 1.3B
+
+### New (2026-05-09): Hyperforge UI Improvement Pass
+- **Library tab** (`/library`): persistent gallery of all generated images + videos with filter (All/Image/Video), grid/list view, lightbox, download, delete
+- **Quality presets** on image tab: Draft · Balanced · HQ · Ultra (one-click steps + CFG)
+- **15s video preset** (240 frames) added to duration strip
+- **12 Unsplash sample images** (was 4) across diverse visual styles
+- **Tab animations**: `pageIn` fade+slide transition, shimmer skeleton loader
+- **Backend**: images now saved to `outputs/image/` + indexed in `outputs/library_meta.json`
+- **API**: `GET /api/library`, `DELETE /api/library/{id}`
+- Infrastructure: committed and pushed to `codex/hyperforge-runtime-hardening`
 
 | Feature | Change | impact |
 |------|--------|--------|
@@ -82,7 +91,8 @@ Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss
 
 ## PENDING WORK (next session)
 
-### Priority 1 — Deploy speed optimization (needs redeploy)
+### Priority 1 — Deploy UI + library changes to VM (needs redeploy)
+Includes: Library tab, quality presets, 15s video preset, 12 sample images, tab animations.
 ```bash
 gcloud compute instances start flux-a100-preemptible --zone=us-central1-a
 gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a

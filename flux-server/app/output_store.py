@@ -1,12 +1,13 @@
 """
-Output storage manager for generated files (video, audio, animation).
+Output storage manager for generated files (image, video, audio, animation).
 
 Manages the output directory, generates unique filenames, serves files
-via FastAPI, and auto-cleans expired outputs.
+via FastAPI, and auto-cleans expired outputs.  Also maintains a JSON
+metadata index for the Library tab.
 """
 
+import json
 import logging
-import os
 import shutil
 import time
 import uuid
@@ -23,13 +24,14 @@ class OutputStore:
     Manages persistent file storage for generated outputs.
 
     Features:
-    - Organized subdirectories by type (video, audio, animation)
+    - Organized subdirectories by type (image, video, audio, animation)
     - Unique filename generation with job prefix
     - TTL-based auto-cleanup
     - Storage usage tracking
+    - JSON metadata index for the Library tab
     """
 
-    SUBDIRS = ("video", "audio", "animation")
+    SUBDIRS = ("image", "video", "audio", "animation")
 
     def __init__(self, base_dir: Optional[str] = None, ttl_hours: int = 24):
         settings = get_settings()
@@ -40,6 +42,10 @@ class OutputStore:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         for subdir in self.SUBDIRS:
             (self.base_dir / subdir).mkdir(exist_ok=True)
+
+        self._meta_path = self.base_dir / "library_meta.json"
+        if not self._meta_path.exists():
+            self._meta_path.write_text("[]", encoding="utf-8")
 
         logger.info(
             f"OutputStore initialized: {self.base_dir} "
@@ -150,6 +156,50 @@ class OutputStore:
             logger.info(f"Deleted output: {rel_path}")
             return True
         return False
+
+    def _load_meta(self) -> list:
+        try:
+            return json.loads(self._meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+    def _save_meta(self, entries: list) -> None:
+        self._meta_path.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+
+    def record_entry(self, rel_path: str, file_type: str, metadata: dict) -> dict:
+        """Append a new library entry and return it."""
+        entry = {
+            "id": uuid.uuid4().hex[:16],
+            "type": file_type,
+            "rel_path": rel_path,
+            "url": self.get_url(rel_path),
+            "created_at": int(time.time()),
+            **metadata,
+        }
+        entries = self._load_meta()
+        entries.insert(0, entry)
+        self._save_meta(entries)
+        return entry
+
+    def list_library(self, type_filter: str = "all", limit: int = 200, offset: int = 0) -> dict:
+        """Return paginated library entries, optionally filtered by type."""
+        entries = self._load_meta()
+        # Drop entries whose files no longer exist
+        entries = [e for e in entries if self.file_exists(e["rel_path"])]
+        if type_filter != "all":
+            entries = [e for e in entries if e.get("type") == type_filter]
+        total = len(entries)
+        return {"total": total, "items": entries[offset: offset + limit]}
+
+    def delete_entry(self, entry_id: str) -> bool:
+        """Delete a library entry and its file. Returns True if found."""
+        entries = self._load_meta()
+        match = next((e for e in entries if e["id"] == entry_id), None)
+        if not match:
+            return False
+        self.delete_file(match["rel_path"])
+        self._save_meta([e for e in entries if e["id"] != entry_id])
+        return True
 
     def cleanup_expired(self) -> int:
         """

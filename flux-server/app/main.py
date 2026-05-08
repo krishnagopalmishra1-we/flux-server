@@ -198,6 +198,7 @@ async def lifespan(app: FastAPI):
     # Create output directories
     settings = get_settings()
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.output_dir).joinpath("image").mkdir(exist_ok=True)
     Path(settings.output_dir).joinpath("video").mkdir(exist_ok=True)
     get_lora_dir().mkdir(parents=True, exist_ok=True)
     get_video_lora_dir().mkdir(parents=True, exist_ok=True)
@@ -393,6 +394,25 @@ async def generate(
     except Exception as e:
         logger.exception("Unexpected error during image generation")
         raise HTTPException(status_code=500, detail="Image generation failed. Check server logs.")
+
+    # Persist to disk and record in library (best-effort — don't fail the response)
+    try:
+        import base64
+        img_bytes = base64.b64decode(img_b64)
+        rel_path = output_store.save_file(img_bytes, "image", ".png")
+        output_store.record_entry(rel_path, "image", {
+            "prompt": req.prompt,
+            "model_name": req.model_name,
+            "width": req.width,
+            "height": req.height,
+            "seed": seed_used,
+            "steps": req.num_inference_steps,
+            "guidance_scale": req.guidance_scale,
+            "lora_name": req.lora_name or None,
+            "inference_time_ms": elapsed_ms,
+        })
+    except Exception as _lib_err:
+        logger.warning(f"Library save skipped: {_lib_err}")
 
     return GenerateResponse(
         status="completed",
@@ -625,6 +645,26 @@ async def upload_video_lora(file: UploadFile = File(...)):
 
 
 # ═══════════════════════════════════════════════════
+#  LIBRARY ENDPOINTS
+# ═══════════════════════════════════════════════════
+
+
+@app.get("/api/library")
+async def get_library(type: str = "all", limit: int = 200, offset: int = 0):
+    """Return all saved library items (images + videos), newest first."""
+    return output_store.list_library(type_filter=type, limit=limit, offset=offset)
+
+
+@app.delete("/api/library/{item_id}")
+async def delete_library_item(item_id: str):
+    """Delete a library item and its file."""
+    deleted = output_store.delete_entry(item_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Library item not found.")
+    return {"status": "deleted", "id": item_id}
+
+
+# ═══════════════════════════════════════════════════
 #  STATIC FILES & OUTPUT SERVING
 # ═══════════════════════════════════════════════════
 
@@ -639,6 +679,7 @@ try:
     _settings = get_settings()
     _output_path = Path(_settings.output_dir)
     _output_path.mkdir(parents=True, exist_ok=True)
+    (_output_path / "image").mkdir(exist_ok=True)
     (_output_path / "video").mkdir(exist_ok=True)
     app.mount("/outputs", StaticFiles(directory=str(_output_path)), name="outputs")
 except Exception as _e:
@@ -653,6 +694,6 @@ async def root_ui():
 @app.get("/{page_name:path}", include_in_schema=False)
 async def routed_ui(page_name: str):
     """Serve the SPA shell for public UI routes."""
-    if page_name in {"image", "video", "queue"}:
+    if page_name in {"image", "video", "queue", "library"}:
         return FileResponse(STATIC_DIR / "index.html")
     raise HTTPException(status_code=404, detail="Not found")

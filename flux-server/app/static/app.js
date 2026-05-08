@@ -15,6 +15,14 @@ const VIDEO_FRAME_PRESETS = [
   { label: "2s",  frames: 33 },
   { label: "3s",  frames: 49 },
   { label: "5s",  frames: 81 },
+  { label: "15s", frames: 240 },
+];
+
+const QUALITY_PRESETS = [
+  { id: "draft",    label: "Draft",    steps: 15, guidance: 3.0, icon: "⚡" },
+  { id: "balanced", label: "Balanced", steps: 25, guidance: 3.5, icon: "⚖" },
+  { id: "hq",       label: "HQ",       steps: 35, guidance: 5.0, icon: "✦" },
+  { id: "ultra",    label: "Ultra",    steps: 50, guidance: 7.0, icon: "◆" },
 ];
 
 const SAMPLE_IMAGES = [
@@ -38,6 +46,46 @@ const SAMPLE_IMAGES = [
     prompt: "cinematic portrait lit by aurora glass, soft rim light, luminous skin, high fashion editorial",
     src: "https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=640&q=80",
   },
+  {
+    title: "Cyber City",
+    prompt: "futuristic cyberpunk megacity, rain-slicked streets, neon billboards, cinematic wide shot, blade runner aesthetic",
+    src: "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Forest Mist",
+    prompt: "ancient forest at dawn, shafts of golden light, morning mist, moody atmospheric, photo real",
+    src: "https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Galaxy Scape",
+    prompt: "milky way over volcanic landscape, long exposure night sky, star trails, vivid colours, epic scale",
+    src: "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Ocean Glass",
+    prompt: "crystal clear tropical ocean, underwater perspective, sunlight caustics, coral reef, vibrant teal",
+    src: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Marble Studio",
+    prompt: "luxury marble texture studio, elegant architecture, soft diffused light, minimalist luxury",
+    src: "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Mountain Peak",
+    prompt: "dramatic mountain peak above clouds, golden sunrise, epic alpine panorama, ultra sharp detail",
+    src: "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Abstract Flow",
+    prompt: "abstract fluid art, iridescent paint swirls, macro photograph, vibrant metallic colours, high detail",
+    src: "https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=640&q=80",
+  },
+  {
+    title: "Retro Neon",
+    prompt: "retro synthwave landscape, purple neon grid, palm trees silhouette, cinematic 80s aesthetic",
+    src: "https://images.unsplash.com/photo-1518655048521-f130df041f66?auto=format&fit=crop&w=640&q=80",
+  },
 ];
 
 const IMAGE_STYLES = [
@@ -58,9 +106,10 @@ const VIDEO_STYLES = [
 ];
 
 const TAB_PATHS = {
-  image: "/image",
-  video: "/video",
-  queue: "/queue",
+  image:   "/image",
+  video:   "/video",
+  queue:   "/queue",
+  library: "/library",
 };
 
 const state = {
@@ -96,6 +145,8 @@ const state = {
   // Jobs
   jobs: [],
   queueStats: { queued: 0, processing: 0, completed: 0, failed: 0, total: 0 },
+  // Library
+  library: [], libraryTotal: 0, libraryFilter: "all", libraryView: "grid", libraryLightbox: null,
   // Active SSE connections: jobId -> EventSource
   _sseConnections: {},
 };
@@ -122,8 +173,9 @@ function styledPrompt(prompt, style) {
   return `${base}, ${style.suffix}`;
 }
 function tabFromPath(path = window.location.pathname) {
-  if (path.startsWith("/video")) return "video";
-  if (path.startsWith("/queue")) return "queue";
+  if (path.startsWith("/video"))   return "video";
+  if (path.startsWith("/queue"))   return "queue";
+  if (path.startsWith("/library")) return "library";
   return "image";
 }
 
@@ -254,6 +306,57 @@ async function loadJobs() {
 }
 
 /* â”€â”€â”€ Image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+
+async function loadLibrary(filter) {
+
+  const f = filter !== undefined ? filter : state.libraryFilter;
+
+  state.libraryFilter = f;
+
+  try {
+
+    const { data } = await fetchJson(`/api/library?type=${encodeURIComponent(f)}&limit=200`);
+
+    state.library = data.items || [];
+
+    state.libraryTotal = data.total || 0;
+
+  } catch { state.library = []; }
+
+  render();
+
+}
+
+
+
+async function deleteLibraryItem(id) {
+
+  try {
+
+    await fetchJson(`/api/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+    await loadLibrary();
+
+  } catch {}
+
+}
+
+
+
+function applyQualityPreset(id) {
+
+  const p = QUALITY_PRESETS.find(q => q.id === id);
+
+  if (!p) return;
+
+  state.form.num_inference_steps = p.steps;
+
+  state.form.guidance_scale = p.guidance;
+
+  render();
+
+}
 
 function applyModel(name) {
   const info = state.models.find(m=>m.name===name);
@@ -447,11 +550,16 @@ function setTab(t, opts = {}) {
   const next = TAB_PATHS[t] ? t : "image";
   state.activeTab = next;
   state.error = "";
+  if (next === "library") loadLibrary();
   const nextPath = TAB_PATHS[next];
   if (opts.push !== false && window.location.pathname !== nextPath) {
     history.pushState({tab: next}, "", nextPath);
   }
   render();
+  requestAnimationFrame(()=>{
+    const page = document.querySelector(".page-content");
+    if (page) { page.classList.remove("page-in"); void page.offsetWidth; page.classList.add("page-in"); }
+  });
   if (opts.scroll !== false) {
     requestAnimationFrame(()=>document.querySelector(".page-content")?.scrollIntoView({behavior:"smooth", block:"start"}));
   }
@@ -550,17 +658,22 @@ function render() {
           <a class="tab-btn ${tab==="queue"?"active":""}" href="/queue" data-tab="queue">Jobs
             <span class="job-count">${state.jobs.filter(j=>j.status==="queued"||j.status==="processing").length||""}</span>
           </a>
+          <a class="tab-btn ${tab==="library"?"active":""}" href="/library" data-tab="library">Library
+            <span class="job-count">${state.libraryTotal||""}</span>
+          </a>
         </nav>
 
         <main class="page-content" data-page="${escapeHtml(tab)}">
           ${tab==="image"     ? renderImageTab(cur,curImg) : ""}
           ${tab==="video"     ? renderVideoTab()           : ""}
           ${tab==="queue"     ? renderQueueTab()           : ""}
+          ${tab==="library"   ? renderLibraryTab()         : ""}
         </main>
 
         ${state.error ? `<div class="global-error">${escapeHtml(state.error)}</div>` : ""}
       </div>
       ${state.lightbox ? `<div class="lightbox" id="lightbox"><img src="${state.lightbox}" alt="Preview" /></div>` : ""}
+      ${state.libraryLightbox ? `<div class="lib-lightbox" id="lib-lightbox"><button class="lib-lb-close">&#10005;</button>${state.libraryLightbox.type==='video'? `<video src="${state.libraryLightbox.url}" controls autoplay loop playsinline></video>`: `<img src="${state.libraryLightbox.url}" alt="Preview" />`}</div>` : ""}
     </div>`;
 
   bindEvents();
@@ -607,6 +720,17 @@ function renderImageTab(currentModel, currentImage) {
             <button type="button" class="style-card ${state.form.style_id===style.id?"active":""}" data-image-style="${escapeHtml(style.id)}">
               <strong>${escapeHtml(style.label)}</strong><span>${escapeHtml(style.suffix)}</span>
             </button>`).join("")}</div>
+        </div>
+        <div class="field"><label>Quality Preset</label>
+          <div class="preset-row quality-row">
+            ${QUALITY_PRESETS.map(p=>{
+              const steps = Number(state.form.num_inference_steps);
+              const active = steps===p.steps && Number(state.form.guidance_scale)===p.guidance;
+              return `<button type="button" class="preset-chip quality-chip ${active?"active":""}" data-quality="${p.id}">
+                <span class="quality-icon">${p.icon}</span><span>${p.label}</span><small>${p.steps}st · cfg${p.guidance}</small>
+              </button>`;
+            }).join("")}
+          </div>
         </div>
         <div class="field"><label>Negative Prompt</label>
           <textarea id="negative_prompt" class="compact" placeholder="blurry, low quality, watermark">${escapeHtml(state.form.negative_prompt)}</textarea></div>
@@ -851,6 +975,79 @@ function renderQueueTab() {
 
 /* â”€â”€â”€ Shared: recent jobs panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
+function renderLibraryTab() {
+  const items = state.library;
+  const filter = state.libraryFilter;
+  const view = state.libraryView;
+
+  const filterBtns = ['all','image','video'].map(f =>
+    `<button type="button" class="lib-filter-btn ${filter===f?'active':''}" data-lib-filter="${f}">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`
+  ).join('');
+
+  const viewBtns = `
+    <button type="button" class="lib-view-btn ${view==='grid'?'active':''}" data-lib-view="grid" title="Grid view">&#9632;&#9632;</button>
+    <button type="button" class="lib-view-btn ${view==='list'?'active':''}" data-lib-view="list" title="List view">&#9776;</button>
+  `;
+
+  const empty = `<div class="lib-empty"><span>\u2727</span><p>Nothing saved yet.</p><p class="lib-empty-sub">Generate an image or video and it will appear here automatically.</p></div>`;
+
+  const gridItems = items.map(item => {
+    const thumb = item.type === 'image'
+      ? `<img src="${item.url}" alt="${escapeHtml(item.prompt||'')}" loading="lazy" />`
+      : `<video src="${item.url}" muted preload="metadata" loop playsinline></video>`;
+    const date = new Date(item.created_at * 1000).toLocaleDateString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    return `
+      <div class="lib-item" data-lib-lightbox="${escapeHtml(item.url)}" data-lib-type="${item.type}">
+        <div class="lib-thumb">${thumb}
+          <span class="lib-type-badge">${item.type}</span>
+          <div class="lib-item-overlay">
+            <a class="lib-btn" href="${item.url}" download title="Download">&#8681;</a>
+            <button type="button" class="lib-btn lib-delete-btn" data-lib-delete="${escapeHtml(item.id)}" title="Delete">&#10005;</button>
+          </div>
+        </div>
+        <div class="lib-meta">
+          <div class="lib-prompt">${escapeHtml((item.prompt||'').slice(0,80))}${(item.prompt||'').length>80?'&hellip;':''}</div>
+          <div class="lib-detail">
+            <span>${escapeHtml(item.model_name||'')}</span>
+            <span>${date}</span>
+            ${item.width ? `<span>${item.width}&times;${item.height}</span>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const listItems = items.map(item => {
+    const date = new Date(item.created_at * 1000).toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'});
+    return `
+      <div class="lib-list-item">
+        <span class="lib-type-badge">${item.type}</span>
+        <div class="lib-list-prompt">${escapeHtml((item.prompt||'').slice(0,120))}${(item.prompt||'').length>120?'&hellip;':''}</div>
+        <span class="lib-list-model">${escapeHtml(item.model_name||'')}</span>
+        <span class="lib-list-date">${date}</span>
+        <div class="lib-list-actions">
+          <a class="lib-btn" href="${item.url}" download title="Download">&#8681;</a>
+          <button type="button" class="lib-btn lib-delete-btn" data-lib-delete="${escapeHtml(item.id)}" title="Delete">&#10005;</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="lib-shell">
+      <div class="lib-toolbar">
+        <div class="lib-filters">${filterBtns}</div>
+        <div class="lib-toolbar-right">
+          <span class="lib-count">${state.libraryTotal} item${state.libraryTotal!==1?'s':''}</span>
+          <div class="lib-views">${viewBtns}</div>
+          <button type="button" class="lib-refresh-btn" id="lib-refresh-btn" title="Refresh">&#8635;</button>
+        </div>
+      </div>
+      ${items.length===0 ? empty : view==='grid'
+        ? `<div class="lib-grid">${gridItems}</div>`
+        : `<div class="lib-list">${listItems}</div>`
+      }
+    </div>`;
+}
+
 function renderRecentJobs(type) {
   const jobs = state.jobs.filter(j=>j.job_type===type).slice(0,5);
   if (!jobs.length) return "";
@@ -916,6 +1113,37 @@ function bindEvents() {
   // Model cards
   document.querySelectorAll("[data-model]").forEach(card=>{
     card.addEventListener("click", ()=>applyModel(card.dataset.model));
+  });
+
+  // Quality presets
+  document.querySelectorAll("[data-quality]").forEach(btn=>{
+    btn.addEventListener("click", ()=>applyQualityPreset(btn.dataset.quality));
+  });
+
+  // Library controls
+  document.querySelectorAll("[data-lib-filter]").forEach(btn=>{
+    btn.addEventListener("click", ()=>loadLibrary(btn.dataset.libFilter));
+  });
+  document.querySelectorAll("[data-lib-view]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{ state.libraryView=btn.dataset.libView; render(); });
+  });
+  document.querySelectorAll("[data-lib-delete]").forEach(btn=>{
+    btn.addEventListener("click", e=>{ e.stopPropagation(); if(confirm('Delete this item?')) deleteLibraryItem(btn.dataset.libDelete); });
+  });
+  document.querySelectorAll("[data-lib-lightbox]").forEach(el=>{
+    el.addEventListener("click", e=>{
+      if(e.target.closest('.lib-btn')) return;
+      const url=el.dataset.libLightbox;
+      const type=el.dataset.libType;
+      state.libraryLightbox={url,type}; render();
+    });
+  });
+  const libRefresh = document.getElementById("lib-refresh-btn");
+  if (libRefresh) libRefresh.addEventListener("click", ()=>loadLibrary());
+  // Library lightbox close
+  const libLb = document.getElementById("lib-lightbox");
+  if (libLb) libLb.addEventListener("click", e=>{
+    if(e.target===libLb||e.target.classList.contains('lib-lb-close')) { state.libraryLightbox=null; render(); }
   });
 
   // Resolution presets
@@ -1033,7 +1261,7 @@ function bindInput(id, setter) {
 async function init() {
   state.activeTab = tabFromPath();
   render();
-  await Promise.all([loadAuthStatus(), loadHealth(), loadModels(), loadJobs()]);
+  await Promise.all([loadAuthStatus(), loadHealth(), loadModels(), loadJobs(), loadLibrary("all")]);
   render();
   // Periodic refresh
   setInterval(loadHealth, 15000);
@@ -1044,8 +1272,10 @@ async function init() {
 }
 
 window.addEventListener("popstate", ()=>{
-  state.activeTab = tabFromPath();
+  const next = tabFromPath();
+  state.activeTab = next;
   state.error = "";
+  if (next === "library") loadLibrary();
   render();
 });
 
