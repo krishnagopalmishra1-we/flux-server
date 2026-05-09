@@ -416,7 +416,10 @@ class VideoPipeline:
                 self._terminate_process_group(process)
             for thread in drain_threads:
                 thread.join(timeout=1.0)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(tmp_dir)
+            except Exception as _rmtree_err:
+                logger.warning("Failed to clean up xDiT temp dir %s: %s", tmp_dir, _rmtree_err)
 
     # ──────────────────────────────────────────────
     #  Model Loading

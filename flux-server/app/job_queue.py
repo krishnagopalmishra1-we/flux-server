@@ -326,21 +326,23 @@ class JobQueue:
         """Update job progress and notify SSE listeners. Safe to call from worker threads."""
         clamped = min(100.0, max(0.0, progress))
         job = self._jobs.get(job_id)
-        if self.is_redis_backend and job is None:
-            job = self._redis_get_job_sync(job_id)
-        if job:
-            job.progress = clamped
-            job.last_updated_at = time.time()
-            # Compute ETA once enough progress has been made.
-            if job.inference_start_time and clamped > 5:
-                elapsed = time.time() - job.inference_start_time
-                rate = clamped / elapsed  # % per second
-                if rate > 0:
-                    remaining = (100.0 - clamped) / rate
-                    job.estimated_seconds_remaining = int(remaining)
-            if self.is_redis_backend:
-                self._redis_save_job_sync(job)
-                self._jobs[job_id] = job
+        if job is None:
+            return  # not claimed by this worker; skip
+        job.progress = clamped
+        job.last_updated_at = time.time()
+        # Compute ETA once enough progress has been made.
+        if job.inference_start_time and clamped > 5:
+            elapsed = time.time() - job.inference_start_time
+            rate = clamped / elapsed  # % per second
+            if rate > 0:
+                remaining = (100.0 - clamped) / rate
+                job.estimated_seconds_remaining = int(remaining)
+        if self.is_redis_backend:
+            # Schedule async Redis save on the event loop — avoids blocking the
+            # calling worker thread and keeps Redis writes off the event loop.
+            _loop = self._loop
+            if _loop and _loop.is_running():
+                asyncio.run_coroutine_threadsafe(self._redis_save_job(job), _loop)
 
         # Schedule queue puts on the event loop — put_nowait is not thread-safe from
         # a worker thread, so we use call_soon_threadsafe to hand off to the loop.
@@ -348,7 +350,7 @@ class JobQueue:
         if loop is None or not loop.is_running():
             return
 
-        status = job.status.value if job else "processing"
+        status = job.status.value
         event = {"progress": clamped, "status": status}
 
         with self._listeners_lock:

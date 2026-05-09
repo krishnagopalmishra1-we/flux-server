@@ -76,6 +76,16 @@ def main() -> None:
         )
         raise SystemExit(1) from exc
 
+    gpu_count = torch.cuda.device_count()
+    if gpu_count == 0:
+        print(
+            "No CUDA GPUs visible (torch.cuda.device_count() == 0). "
+            "Ensure CUDA_VISIBLE_DEVICES is set correctly before launching torchrun.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1)
+
     height, width = RESOLUTION_MAP[args.resolution]
     height = (height // 32) * 32
     width = (width // 32) * 32
