@@ -203,14 +203,19 @@ class VideoPipeline:
 
             logger.info(f"Loading video model: {model_name} (cache={cache_dir})")
             try:
+                # WAN 14B BF16 dual-transformer peaks at ~78 GB on a single GPU.
+                # NF4 is required on ≤80 GB GPUs; BF16 is safe on ≥90 GB (e.g. H100 SXM5 94 GB).
+                _vram = self._gpu_total_gb()
+                _wan14b_nf4 = _vram < 90.0 or _vram == 0.0
+
                 if model_name == "wan-t2v-1.3b":
                     self._load_wan_t2v("Wan-AI/Wan2.1-T2V-1.3B-Diffusers", quantize=False, settings=settings, cache_dir=cache_dir)
                 elif model_name == "wan-t2v-14b":
-                    # NF4 double-quantization: transformer ~7-8 GB vs ~28 GB BF16.
-                    # Required on A100 40GB — BF16 14B OOMs at 49 frames (38.76 GB).
-                    self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=True, settings=settings, cache_dir=cache_dir)
+                    if not _wan14b_nf4:
+                        logger.info(f"  GPU VRAM {_vram:.0f}GB ≥ 90GB — loading WAN T2V 14B in BF16 (no NF4)")
+                    self._load_wan_t2v("Wan-AI/Wan2.2-T2V-A14B-Diffusers", quantize=_wan14b_nf4, settings=settings, cache_dir=cache_dir)
                 elif model_name == "wan-i2v-14b":
-                    self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", settings=settings, cache_dir=cache_dir)
+                    self._load_wan_i2v("Wan-AI/Wan2.2-I2V-A14B-Diffusers", quantize=_wan14b_nf4, settings=settings, cache_dir=cache_dir)
                 elif model_name == "hunyuan-video":
                     self._load_hunyuan_video(settings=settings, cache_dir=cache_dir)
                 else:
@@ -283,7 +288,7 @@ class VideoPipeline:
         if not quantize:
             self._try_compile_transformer()
 
-    def _load_wan_i2v(self, model_id: str, settings, cache_dir: str) -> None:
+    def _load_wan_i2v(self, model_id: str, settings, cache_dir: str, quantize: bool = True) -> None:
         WanI2V = self._resolve_pipeline_class(
             "WanImageToVideoPipeline",
             ["diffusers.pipelines.wan.pipeline_wan_i2v", "diffusers.pipelines.wan"],
@@ -292,40 +297,46 @@ class VideoPipeline:
         if settings.hf_token:
             load_kwargs["token"] = settings.hf_token
 
-        # NF4 double-quantization: same VRAM constraint as T2V 14B.
-        # WAN 2.2 I2V also has transformer_2 — must quantize both with NF4.
-        logger.info(f"  Loading {model_id} transformer with NF4 double-quantization...")
-        nf4 = self._make_nf4_config()
-        try:
-            from diffusers import WanTransformer3DModel
-        except ImportError:
-            from diffusers.models import WanTransformer3DModel
-        transformer = WanTransformer3DModel.from_pretrained(
-            model_id, subfolder="transformer",
-            quantization_config=nf4, torch_dtype=torch.bfloat16,
-            cache_dir=cache_dir,
-            **({"token": settings.hf_token} if settings.hf_token else {}),
-        )
-        logger.info("  Transformer: NF4 quantized (~7 GB)")
-        transformer_2 = None
-        try:
-            transformer_2 = WanTransformer3DModel.from_pretrained(
-                model_id, subfolder="transformer_2",
+        if quantize:
+            # NF4 double-quantization: same VRAM constraint as T2V 14B.
+            # WAN 2.2 I2V also has transformer_2 — must quantize both with NF4.
+            logger.info(f"  Loading {model_id} transformer with NF4 double-quantization...")
+            nf4 = self._make_nf4_config()
+            try:
+                from diffusers import WanTransformer3DModel
+            except ImportError:
+                from diffusers.models import WanTransformer3DModel
+            transformer = WanTransformer3DModel.from_pretrained(
+                model_id, subfolder="transformer",
                 quantization_config=nf4, torch_dtype=torch.bfloat16,
                 cache_dir=cache_dir,
                 **({"token": settings.hf_token} if settings.hf_token else {}),
             )
-            logger.info("  Transformer_2: NF4 quantized (~7 GB)")
-        except Exception:
-            pass  # not all I2V versions have transformer_2
-        pipe_kwargs = {"transformer": transformer}
-        if transformer_2 is not None:
-            pipe_kwargs["transformer_2"] = transformer_2
-        self._pipe = WanI2V.from_pretrained(model_id, **pipe_kwargs, **load_kwargs)
-        for name, component in self._pipe.components.items():
-            if name not in ("transformer", "transformer_2") and hasattr(component, "to"):
-                component.to(self.device)
-        logger.info("  I2V NF4 quantized, all non-transformer components on GPU")
+            logger.info("  Transformer: NF4 quantized (~7 GB)")
+            transformer_2 = None
+            try:
+                transformer_2 = WanTransformer3DModel.from_pretrained(
+                    model_id, subfolder="transformer_2",
+                    quantization_config=nf4, torch_dtype=torch.bfloat16,
+                    cache_dir=cache_dir,
+                    **({"token": settings.hf_token} if settings.hf_token else {}),
+                )
+                logger.info("  Transformer_2: NF4 quantized (~7 GB)")
+            except Exception:
+                pass  # not all I2V versions have transformer_2
+            pipe_kwargs = {"transformer": transformer}
+            if transformer_2 is not None:
+                pipe_kwargs["transformer_2"] = transformer_2
+            self._pipe = WanI2V.from_pretrained(model_id, **pipe_kwargs, **load_kwargs)
+            for name, component in self._pipe.components.items():
+                if name not in ("transformer", "transformer_2") and hasattr(component, "to"):
+                    component.to(self.device)
+            logger.info("  I2V NF4 quantized, all non-transformer components on GPU")
+        else:
+            logger.info(f"  Loading {model_id} I2V in BF16...")
+            self._pipe = WanI2V.from_pretrained(model_id, **load_kwargs)
+            self._pipe.to(self.device)
+            logger.info("  I2V BF16 loaded and moved to GPU")
         self._apply_memory_opts()
 
 
@@ -1027,6 +1038,12 @@ class VideoPipeline:
         if torch.cuda.is_available():
             return torch.cuda.memory_allocated() / (1024 ** 2)
         return 0.0
+
+    def _gpu_total_gb(self) -> float:
+        """Total VRAM in GB for the assigned GPU (device 0 after CUDA_VISIBLE_DEVICES)."""
+        if not torch.cuda.is_available():
+            return 0.0
+        return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
 
     @property
     def is_loaded(self) -> bool:

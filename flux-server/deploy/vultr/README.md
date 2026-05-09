@@ -4,16 +4,16 @@ Deploy the full Hyperforge AI stack (image + video generation) on a Vultr Cloud 
 
 ---
 
-## Why Vultr
+## Why Vultr Bare Metal
 
-| | Vultr Cloud GPU | GCP A100 40GB Spot | AWS p4de.24xlarge |
+| | Vultr Bare Metal (8× A100 SXM) | GCP A100 40GB Spot | AWS p4de.24xlarge |
 |---|---|---|---|
-| GPU | A100 80GB (single) | A100 40GB | 8× A100 80GB |
-| Price (spot/preemptible) | ~$2–3/hr | ~$1.5–2/hr | ~$13/hr (1/8 share) |
-| Preemption | No (pay-as-you-go) | Yes | Yes (spot) |
-| Disk speed | NVMe SSD | HDD (30 min loads) | gp3 EBS |
+| GPU | **8× A100 SXM 80GB** (640GB VRAM) | A100 40GB | 8× A100 80GB |
+| Price | ~$11.92/hr preemptible | ~$1.5–2/hr | ~$32/hr |
+| Preemption | Yes (preemptible) | Yes | Yes (spot) |
+| Disk | **4× NVMe SSD** | HDD (30 min loads) | gp3 EBS |
 | WAN 14B load time | **~2 min** (NVMe) | ~30 min (HDD) | ~4 min |
-| Single GPU? | **Yes** | Yes | No (min 8) |
+| Plan ID | `vbm-112c-2048gb-8-a100-gpu` | — | — |
 
 ---
 

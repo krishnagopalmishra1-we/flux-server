@@ -1,27 +1,36 @@
 # CLAUDE.md — Neural Creation Studio
 # Read this at the start of every session. It is the single source of truth.
-# Last updated: 2026-04-16
+# Last updated: 2026-05-09
 
 ---
 
 ## WHAT THIS PROJECT IS
 
-A FastAPI video/image generation server running on a GCP A100 (40GB) SPOT VM.
-Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss.
+A FastAPI video/image generation server targeting Vultr Bare Metal 8× A100 SXM 80GB.
+Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss,
+with 8 parallel workers for maximum GPU utilisation.
 
 **Repo root**: `d:/Flux_Lora/`
 **Server code**: `d:/Flux_Lora/flux-server/`
+
+### GCP VM (legacy — use Vultr for production)
 **GCP VM**: `flux-a100-preemptible`, zone `us-central1-a`, project `flux-lora-gpu-project`
 **SSH**: `gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a`
 **Container**: `flux-server-flux-server-1`
 **API**: `http://localhost:8080` (from inside VM)
 
+### Vultr Bare Metal (active target)
+**Plan**: `vbm-112c-2048gb-8-a100-gpu` — 8× A100 SXM 80 GB, NVMe, 112 vCPU, 2TB RAM
+**Deploy script**: `flux-server/deploy/vultr/launch.sh`
+**Bootstrap**: `flux-server/deploy/vultr/bootstrap.sh`
+**Compose**: `flux-server/deploy/vultr/docker-compose.vultr.yml`
+
 ---
 
 ## CURRENT VM STATE
 
-**VM status**: RUNNING (as of end-of-session 2026-04-16)
-**Stop VM before exit**: `gcloud compute instances stop flux-a100-preemptible --zone=us-central1-a`
+**GCP VM status**: RUNNING (as of end-of-session 2026-04-16)
+**Stop GCP VM before exit**: `gcloud compute instances stop flux-a100-preemptible --zone=us-central1-a`
 
 ---
 
@@ -40,6 +49,67 @@ Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss
 **HDD model cache** (`/mnt/hf-cache-disk/`):
 - `wan-t2v-14b` (118GB) — loads in ~30 min from HDD
 - `wan-i2v-14b` (118GB) — loads in ~18 min from HDD
+
+---
+
+## VULTR 8× A100 MULTI-GPU ARCHITECTURE
+**Added: 2026-05-09**
+
+### How parallel GPU utilisation works
+
+| Layer | File | Change |
+|-------|------|--------|
+| Docker | `deploy/vultr/docker-compose.vultr.yml` | `count: all` (was `count: 1`), removed `CUDA_VISIBLE_DEVICES=0`, `shm_size: 16g` |
+| Gunicorn | `gunicorn.conf.py` | `workers = nvidia-smi GPU count` (auto-detected), `post_fork` assigns each worker `CUDA_VISIBLE_DEVICES=N` |
+| Model mgr | `app/model_manager.py` | NF4 now VRAM-aware: skipped for image models on ≥50 GB GPU; WAN 14B retains NF4 (BF16 ~78 GB is too tight for single 80 GB) |
+| Video pipeline | `app/pipelines/video_pipeline.py` | WAN 14B NF4 conditional on `_gpu_total_gb() < 90` |
+
+**Result**: 8 gunicorn workers, each pinned to one A100 80 GB, each serving one concurrent video/image job.
+Expected throughput: **8× parallel jobs** vs previous 1.
+
+### NF4 quantization decisions on 80 GB A100
+
+| Model | BF16 size | NF4 on 80 GB? | Reason |
+|-------|-----------|---------------|--------|
+| WAN T2V / I2V 14B | ~67.5 GB model + ~12 GB activations ≈ 80 GB | **Yes** (NF4) | Too close to limit; NF4 = 25.5 GB, safe |
+| HunyuanVideo | ~9 GB NF4 | **Yes** (NF4) | CPU-offload text encoder, NF4 already optimised |
+| SD3.5-Large | ~25 GB BF16 | **No** (BF16) | `bf16_min_vram_gb=50` → auto BF16 on 80 GB |
+| FLUX.1-dev | ~24 GB BF16 | **No** (BF16) | Already unquantized |
+| WAN T2V 1.3B | ~4 GB BF16 | **No** (BF16) | Already unquantized |
+
+### Env vars for tuning
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `NUM_WORKERS` | auto (GPU count) | Override worker count (e.g. `4` for debug) |
+| `GPU_COUNT` | auto (nvidia-smi) | Override GPU detection (e.g. if nvidia-smi unavailable) |
+
+### Vultr Quick Commands
+
+```bash
+# Deploy (first time)
+export VULTR_API_KEY="..." SSH_KEY_ID="..."
+bash flux-server/deploy/vultr/launch.sh
+
+# SSH into instance (after launch.sh saves .instance file)
+source flux-server/deploy/vultr/.instance
+ssh root@$PUBLIC_IP
+
+# After SSH: verify all 8 GPUs visible inside container
+docker exec flux-server-flux-server-1 nvidia-smi -L
+
+# Check workers and their GPU assignments (from container logs)
+docker logs flux-server-flux-server-1 2>&1 | grep "gunicorn.*GPU"
+
+# Rebuild and restart after code change
+cd /opt/flux-server/flux-server && git pull && docker compose up --build -d
+
+# Check active jobs on all workers
+curl -s http://localhost:8080/api/jobs | python3 -c "import sys,json; [print(j['job_id'][:8], j['status'], j.get('model_name')) for j in json.load(sys.stdin)]"
+
+# GPU utilisation across all 8 A100s
+nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
+```
 
 ---
 
@@ -91,34 +161,43 @@ Primary goal: generate 1–2 minute videos in ≤30 minutes without quality loss
 
 ## PENDING WORK (next session)
 
-### Priority 1 — Deploy UI + library changes to VM (needs redeploy)
-Includes: Library tab, quality presets, 15s video preset, 12 sample images, tab animations.
+### Priority 1 — Deploy Vultr 8× A100 instance
+The multi-GPU code changes are DONE (2026-05-09). Need to provision and test:
 ```bash
-gcloud compute instances start flux-a100-preemptible --zone=us-central1-a
-gcloud compute ssh krishnagopalmishra1-we@flux-a100-preemptible --zone=us-central1-a
-cd /opt/flux-server/flux-server && git pull && sudo docker compose up --build -d
+# Provision instance (takes ~10 min)
+export VULTR_API_KEY="..." SSH_KEY_ID="..."
+bash flux-server/deploy/vultr/launch.sh
+
+# After instance is up, run setup_storage.sh on it, copy .env, start service
+source flux-server/deploy/vultr/.instance
+ssh root@$PUBLIC_IP
 ```
+Then verify all 8 GPUs are seen by the container and 8 gunicorn workers start.
 
-### Priority 2 — Re-run WAN T2V 14B 15s test with new settings
-Use updated test script: `test_hq_wan14b.sh` (49fr chunks, 20 steps)
-Copy to VM: `gcloud compute scp test_hq_wan14b.sh krishnagopalmishra1-we@flux-a100-preemptible:/tmp/ --zone=us-central1-a`
+### Priority 2 — Deploy UI + library changes (included in same deploy)
+Includes: Library tab, quality presets, 15s video preset, 12 sample images, tab animations.
+These are already committed on `codex/hyperforge-runtime-hardening`.
 
-### Priority 3 — Complete HunyuanVideo download (~38GB remaining)
+### Priority 3 — Re-run WAN T2V 14B 15s test on Vultr
+Use updated test script: `test_hq_wan14b.sh` (49fr chunks, 20 steps).
+On Vultr with NVMe block storage, WAN 14B load time should be ≤5 min vs 30 min on GCP HDD.
+
+### Priority 4 — Complete HunyuanVideo download (~38GB remaining)
 Use `download_hunyuan_v4.py`. Rules:
 - Run ONLY during active inference (model in VRAM) — NOT during model load
 - `os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"` BEFORE any imports
 - Delete `.incomplete` blobs before restart if stalled
-- Run inside container: `sudo docker exec container bash -c 'nohup python3 /tmp/download_hunyuan_v4.py > /tmp/log 2>&1 &'`
+- Run inside container: `docker exec container bash -c 'nohup python3 /tmp/download_hunyuan_v4.py > /tmp/log 2>&1 &'`
 
-### Priority 4 — Plan item 3.4: 960-frame (60s) chunked test
-After 15s test passes with new settings.
+### Priority 5 — Parallel chunk generation across GPUs (future, ~2-3 days)
+True parallel chunk inference using torch.multiprocessing or subprocess-per-GPU.
+Not yet implemented — current state: 8 independent workers, each handles one job sequentially.
 
-### BLOCKED — Phase 1 NVMe SSD
-Would reduce WAN 14B load time 30min→2min. Pending GCP provisioning.
-```bash
-gcloud compute disks create flux-model-nvme --size=256GB --type=pd-ssd --zone=us-central1-a
-gcloud compute instances attach-disk flux-a100-preemptible --disk=flux-model-nvme --zone=us-central1-a
-```
+### RESOLVED (GCP) — Phase 1 NVMe SSD
+Vultr NVMe block storage already solves the 30min model load issue on GCP.
+
+### RESOLVED — Docker GPU lock
+`count: all` + no `CUDA_VISIBLE_DEVICES` in compose. gunicorn post_fork assigns GPUs.
 
 ---
 

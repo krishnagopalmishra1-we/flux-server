@@ -1,6 +1,17 @@
 """
 Universal Model Manager for image and video generation.
-Handles lazy-loading, VRAM management, and model switching on a single GPU.
+Handles lazy-loading, VRAM management, and model switching.
+
+Multi-GPU deployment (Vultr 8× A100 80GB):
+  Each gunicorn worker sees exactly one GPU via CUDA_VISIBLE_DEVICES set in
+  gunicorn's post_fork hook.  This manager therefore always addresses device 0
+  (the worker's assigned GPU).  gpu_info() aggregates all GPUs visible to the
+  process for diagnostic purposes.
+
+NF4 quantization is applied adaptively: on a 40 GB A100 it is required for WAN
+14B and SD3.5-Large; on an 80 GB A100 it is skipped for image models that fit
+comfortably in BF16 (SD3.5-Large ~25 GB BF16 vs 80 GB available).  WAN 14B
+still requires NF4 on a single 80 GB GPU because BF16 inference peaks at ~78 GB.
 """
 
 import gc
@@ -53,6 +64,9 @@ class ModelConfig:
         output_type: OutputType = OutputType.IMAGE_B64,
         quantize: bool = False,
         quantize_type: str = "nf4",
+        # GPU VRAM (in GB) above which BF16 is safe for this model without quantization.
+        # Set to 0.0 to always quantize when quantize=True (e.g. WAN 14B on single GPU).
+        bf16_min_vram_gb: float = 0.0,
         transformer_file: str | None = None,
         variant: str | None = None,
         vram_free_gb: float = 1.0,
@@ -73,6 +87,7 @@ class ModelConfig:
         self.output_type = output_type
         self.quantize = quantize
         self.quantize_type = quantize_type
+        self.bf16_min_vram_gb = bf16_min_vram_gb
         self.transformer_file = transformer_file
         self.variant = variant
         self.vram_free_gb = vram_free_gb
@@ -122,6 +137,8 @@ class MultiModelManager:
             output_type=OutputType.IMAGE_B64,
             quantize=True,
             quantize_type="nf4",
+            # BF16 footprint ~25 GB — skip NF4 on GPUs with ≥50 GB VRAM (e.g. A100 80 GB).
+            bf16_min_vram_gb=50.0,
             vram_free_gb=18.0,
             description="SD3.5-Large: Multi-modal, flexible, top-tier quality",
             min_steps=20,
@@ -235,9 +252,14 @@ class MultiModelManager:
         self.pipelines: Dict[str, DiffusionPipeline] = {}
         self.current_model = default_model
         self.lru_cache: List[str] = []  # Track load order for unloading
-        self.max_loaded = 1  # Only 1 model in VRAM at a time (40GB A100)
-        
-        logger.info(f"MultiModelManager initialized (device={self.device})")
+        # One model per worker. In multi-GPU mode each gunicorn worker owns one GPU
+        # (set via CUDA_VISIBLE_DEVICES in post_fork) so max_loaded=1 is correct.
+        self.max_loaded = 1
+
+        logger.info(
+            f"MultiModelManager initialized (device={self.device}, "
+            f"vram={self._get_vram_gb():.0f}GB)"
+        )
     
     def get_model_config(self, model_name: str) -> ModelConfig:
         """Get configuration for a model."""
@@ -257,6 +279,37 @@ class MultiModelManager:
             return settings.cache_dir_ssd
         return settings.cache_dir
     
+    @staticmethod
+    def _get_vram_gb() -> float:
+        """Total VRAM in GB for the first visible CUDA device, or 0 if no GPU."""
+        if not torch.cuda.is_available():
+            return 0.0
+        return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+
+    def _should_quantize(self, config: ModelConfig) -> bool:
+        """Return True if NF4 quantization should be applied for this model.
+
+        Decision logic:
+        - If config.quantize is False → never quantize.
+        - If bf16_min_vram_gb is set and GPU VRAM meets the threshold → skip NF4,
+          load in full BF16 (better quality, faster inference, no dequant overhead).
+        - Otherwise → apply NF4 (required on smaller GPUs).
+
+        WAN 14B BF16 peaks at ~78 GB on a single GPU — bf16_min_vram_gb is left at
+        the default 0.0, so NF4 is always used for those models.
+        """
+        if not config.quantize:
+            return False
+        if config.bf16_min_vram_gb > 0.0:
+            vram_gb = self._get_vram_gb()
+            if vram_gb >= config.bf16_min_vram_gb:
+                logger.info(
+                    f"GPU VRAM {vram_gb:.0f}GB ≥ {config.bf16_min_vram_gb:.0f}GB threshold "
+                    f"— loading in BF16 (skipping NF4)"
+                )
+                return False
+        return True
+
     def list_models(self, category: ModelCategory | None = None) -> Dict[str, str]:
         """List available models with descriptions, optionally filtered by category."""
         return {
@@ -278,7 +331,13 @@ class MultiModelManager:
         return sorted(set(config.category.value for config in self.MODELS.values()))
     
     def gpu_info(self) -> Dict:
-        """Get GPU memory info."""
+        """Get GPU memory info for the primary (worker-assigned) device.
+
+        In multi-GPU gunicorn mode each worker has CUDA_VISIBLE_DEVICES set to a
+        single GPU, so device 0 here is always that worker's exclusive GPU.
+        The 'all_gpus' key lists every GPU visible to the process (useful for the
+        health endpoint and diagnostics).
+        """
         if not torch.cuda.is_available():
             return {
                 "name": "CPU",
@@ -286,19 +345,35 @@ class MultiModelManager:
                 "used_gb": 0,
                 "free_gb": 0,
                 "device": "cpu",
+                "gpu_count": 0,
             }
-        
+
+        # Primary device (index 0 = worker-assigned GPU)
         props = torch.cuda.get_device_properties(0)
-        total_memory = props.total_memory / (1024**3)
-        used_memory = torch.cuda.memory_allocated() / (1024**3)
+        total_memory = props.total_memory / (1024 ** 3)
+        used_memory = torch.cuda.memory_allocated(0) / (1024 ** 3)
         free_memory = total_memory - used_memory
-        
+
+        # Aggregate stats across all visible devices (diagnostic)
+        n = torch.cuda.device_count()
+        all_gpus = []
+        for i in range(n):
+            p = torch.cuda.get_device_properties(i)
+            all_gpus.append({
+                "index": i,
+                "name": p.name,
+                "total_gb": round(p.total_memory / (1024 ** 3), 1),
+                "used_gb": round(torch.cuda.memory_allocated(i) / (1024 ** 3), 1),
+            })
+
         return {
             "name": props.name,
             "total_gb": round(total_memory, 2),
             "used_gb": round(used_memory, 2),
             "free_gb": round(free_memory, 2),
             "device": self.device,
+            "gpu_count": n,
+            "all_gpus": all_gpus,
         }
     
     def is_loaded(self) -> bool:
@@ -376,8 +451,10 @@ class MultiModelManager:
             if config.variant:
                 load_kwargs["variant"] = config.variant
             
+            use_nf4 = self._should_quantize(config)
+
             # FLUX models with quantization: load transformer separately
-            if config.quantize and config.pipeline_class == FluxPipeline:
+            if use_nf4 and config.pipeline_class == FluxPipeline:
                 from diffusers import FluxTransformer2DModel
                 nf4_config = HFBitsAndBytesConfig(
                     load_in_4bit=True,
@@ -401,8 +478,9 @@ class MultiModelManager:
                     component = getattr(pipe, attr, None)
                     if component is not None and hasattr(component, "to"):
                         component.to(self.device)
-            elif config.quantize and config.pipeline_class == StableDiffusion3Pipeline:
-                # SD3.5-Large NF4 path: quantize transformer while keeping pipeline API unchanged.
+            elif use_nf4 and config.pipeline_class == StableDiffusion3Pipeline:
+                # SD3.5-Large NF4 path: only used on GPUs with <50 GB VRAM (e.g. A100 40 GB).
+                # On 80 GB A100 _should_quantize() returns False → falls through to BF16 path.
                 from diffusers import SD3Transformer2DModel
                 nf4_config = HFBitsAndBytesConfig(
                     load_in_4bit=True,
@@ -427,8 +505,9 @@ class MultiModelManager:
                     if component is not None and hasattr(component, "to"):
                         component.to(self.device)
             else:
-                # Standard loading (no quantization)
-                logger.info(f"Loading {model_name} from {config.model_id}...")
+                # Standard BF16 loading — used for all unquantized models and for
+                # quantize=True models on high-VRAM GPUs (e.g. SD3.5 on 80 GB A100).
+                logger.info(f"Loading {model_name} in BF16 from {config.model_id}...")
                 pipe = config.pipeline_class.from_pretrained(config.model_id, **load_kwargs)
                 logger.info(f"Moving {model_name} to {self.device}...")
                 pipe.to(self.device)

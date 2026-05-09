@@ -1,7 +1,10 @@
 # Vultr Cloud GPU deployment compose file.
 # bootstrap.sh copies this to flux-server/docker-compose.yml on the instance.
 # All models live on the attached block storage volume at /mnt/model-disk.
-# A100 80GB = full 80GB available to a single container — no CUDA_VISIBLE_DEVICES slice needed.
+#
+# vbm-112c-2048gb-8-a100-gpu: 8× A100 SXM 80GB — all 8 GPUs exposed to the container.
+# gunicorn post_fork hook assigns each worker its own GPU via CUDA_VISIBLE_DEVICES.
+# Do NOT set CUDA_VISIBLE_DEVICES here — workers manage it themselves.
 
 services:
   flux-server:
@@ -18,17 +21,18 @@ services:
       - /mnt/model-disk/video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-      # Vultr GPU instances expose all GPUs — single A100 80GB plan has 1 GPU
-      - CUDA_VISIBLE_DEVICES=0
+      # CUDA_VISIBLE_DEVICES intentionally omitted — gunicorn post_fork assigns per-worker GPU.
+      # Override NUM_WORKERS to limit concurrency (default: auto-detected GPU count).
+      # Override GPU_COUNT if nvidia-smi is unavailable at startup.
     env_file:
       - .env
-    shm_size: '4g'
+    shm_size: '16g'
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
