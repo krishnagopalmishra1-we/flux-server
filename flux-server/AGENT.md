@@ -160,6 +160,8 @@ Recent production deployment target:
 - Instance: `flux-a100-preemptible`
 - App dir on VM: `/opt/flux-server`
 
+Vultr bootstrap uses `DEPLOY_BRANCH`, defaulting to `codex/hyperforge-runtime-hardening-impl` until these runtime hardening changes are merged to `main`. Do not remove the branch pin unless `main` contains the Redis/xDiT deployment code.
+
 ## Verification Checklist
 
 Before calling a change done, verify:

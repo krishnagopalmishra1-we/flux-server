@@ -10,6 +10,7 @@
 #   REGION        ewr                          (ewr=NJ, atl=Atlanta)
 #   PLAN_ID       vbm-112c-2048gb-8-a100-gpu   (8x A100 SXM 80GB, NVMe)
 #   LABEL         hyperforge-gpu
+#   DEPLOY_BRANCH codex/hyperforge-runtime-hardening-impl
 
 set -euo pipefail
 
@@ -17,6 +18,7 @@ set -euo pipefail
 : "${VULTR_API_KEY:?Set VULTR_API_KEY to your Vultr API key}"
 : "${SSH_KEY_ID:?Set SSH_KEY_ID to your Vultr SSH key ID}"
 HF_TOKEN="${HF_TOKEN:-}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-codex/hyperforge-runtime-hardening-impl}"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 REGION="${REGION:-ewr}"
@@ -55,6 +57,7 @@ echo "  OS ID: $OS_ID (Ubuntu 22.04 LTS x64)"
 echo "Uploading bootstrap script..."
 STARTUP_SCRIPT="#!/usr/bin/env bash
 export HF_TOKEN='$HF_TOKEN'
+export DEPLOY_BRANCH='$DEPLOY_BRANCH'
 $(tail -n +2 "$SCRIPT_DIR/bootstrap.sh")"
 
 STARTUP_B64=$(echo "$STARTUP_SCRIPT" | base64 -w0)

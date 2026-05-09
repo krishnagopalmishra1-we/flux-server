@@ -33,6 +33,9 @@ services:
       - /mnt/model-disk/video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - VIDEO_PARALLEL_BACKEND=auto
+      - GPUS_PER_JOB=4
+      - NUM_WORKERS=2
       - JOB_BACKEND=redis
       - REDIS_URL=redis://redis:6379/0
       # CUDA_VISIBLE_DEVICES intentionally omitted — gunicorn post_fork assigns per-worker GPU.

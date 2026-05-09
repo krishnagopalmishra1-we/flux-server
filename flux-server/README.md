@@ -97,6 +97,14 @@ JOB_BACKEND=redis
 REDIS_URL=redis://redis:6379/0
 ```
 
+## Vultr Deploy Branch
+
+Vultr bootstrap deploys `DEPLOY_BRANCH`, defaulting to `codex/hyperforge-runtime-hardening-impl` until these runtime changes are merged to `main`. Override it when launching if needed:
+
+```bash
+DEPLOY_BRANCH=main ./deploy/vultr/launch.sh
+```
+
 Then verify:
 
 ```bash

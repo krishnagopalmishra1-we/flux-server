@@ -69,13 +69,15 @@ echo "  nvidia-container-toolkit: ready"
 # ── Clone repo ─────────────────────────────────────────────────────────────────
 REPO_URL="https://github.com/krishnagopalmishra1-we/flux-server.git"
 APP_DIR="/opt/flux-server"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-codex/hyperforge-runtime-hardening-impl}"
 
 if [[ -d "$APP_DIR/.git" ]]; then
-  echo "Repo exists, pulling latest..."
-  git -C "$APP_DIR" pull --ff-only
+  echo "Repo exists, switching to $DEPLOY_BRANCH and pulling latest..."
+  git -C "$APP_DIR" fetch --depth=1 origin "$DEPLOY_BRANCH"
+  git -C "$APP_DIR" checkout -B "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
 else
-  echo "Cloning $REPO_URL..."
-  git clone --depth=1 "$REPO_URL" "$APP_DIR"
+  echo "Cloning $REPO_URL branch $DEPLOY_BRANCH..."
+  git clone --depth=1 --branch "$DEPLOY_BRANCH" "$REPO_URL" "$APP_DIR"
 fi
 
 FLUX_DIR="$APP_DIR/flux-server"
@@ -96,6 +98,11 @@ VIDEO_LORA_DIR=/mnt/hf-cache/video_loras
 WAN_DEFAULT_VARIANT=1.3b
 OUTPUT_DIR=/mnt/outputs
 OUTPUT_TTL_HOURS=168
+VIDEO_PARALLEL_BACKEND=auto
+GPUS_PER_JOB=4
+NUM_WORKERS=2
+JOB_BACKEND=redis
+REDIS_URL=redis://redis:6379/0
 ENVEOF
   echo "  .env created — set HF_TOKEN before starting"
 fi
