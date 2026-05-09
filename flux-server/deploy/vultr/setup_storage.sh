@@ -75,8 +75,10 @@ fi
 # ── Create directory structure ─────────────────────────────────────────────────
 echo ""
 echo "Creating model cache directory structure..."
-mkdir -p "$MOUNT_POINT"/{hf-cache,outputs/image,outputs/video,loras,video_loras}
+mkdir -p "$MOUNT_POINT"/{hf-cache,outputs/image,outputs/video,loras,video_loras,redis}
 chmod 777 "$MOUNT_POINT/outputs" "$MOUNT_POINT/outputs/image" "$MOUNT_POINT/outputs/video"
+# Redis container runs as UID 999; needs write access to its data directory.
+chmod 777 "$MOUNT_POINT/redis"
 echo "  Directories created."
 
 # ── Update symlinks ────────────────────────────────────────────────────────────

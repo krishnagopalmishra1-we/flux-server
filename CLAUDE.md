@@ -1,6 +1,6 @@
 # CLAUDE.md - Hyperforge Session Handoff
 # Read this at the start of every session. It is the single source of truth.
-# Last updated: 2026-05-09
+# Last updated: 2026-05-09 (session 2)
 
 ---
 
@@ -185,6 +185,27 @@ Completed locally:
 Observed local warning:
 - diffusers falls back to PIL image processors because `torchvision` is not installed
 - this did not block imports during verification
+
+---
+
+## VULTR DEPLOYMENT STATUS (2026-05-09)
+
+Vultr bare metal A100 plan (`vbm-112c-2048gb-8-a100-gpu`) requires account-level
+approval before the API accepts provisioning requests. Tested in both ewr and atl
+regions — both return 403 "Please open a support request for access to this product."
+
+**Status: Vultr support ticket submitted. Waiting for A100 bare metal access approval.**
+
+SSH key already uploaded: `hyperforge` (UUID: `50134fc3-969b-43a1-8d47-fb7b4b5c3eae`)
+
+Evaluated and rejected fallback:
+- A16 Cloud GPU plans (available now, no approval needed) — rejected because A16 has
+  16 GB GDDR6 per chip (~10x less memory bandwidth than A100 SXM). WAN 14B at 720p
+  would take 25-40 min/video and may not fit without CPU offloading. Not worth it.
+
+When approval arrives, run `launch.sh` with:
+  VULTR_API_KEY, SSH_KEY_ID=50134fc3-969b-43a1-8d47-fb7b4b5c3eae,
+  HF_TOKEN (from flux-server/.env), REGION=ewr
 
 ---
 
