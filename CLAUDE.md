@@ -161,6 +161,8 @@ nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
 
 ## PENDING WORK (next session)
 
+### Full plan: `implementation_plan.md` (repo root) — read it at session start.
+
 ### Priority 1 — Deploy Vultr 8× A100 instance
 The multi-GPU code changes are DONE (2026-05-09). Need to provision and test:
 ```bash
@@ -189,9 +191,12 @@ Use `download_hunyuan_v4.py`. Rules:
 - Delete `.incomplete` blobs before restart if stalled
 - Run inside container: `docker exec container bash -c 'nohup python3 /tmp/download_hunyuan_v4.py > /tmp/log 2>&1 &'`
 
-### Priority 5 — Parallel chunk generation across GPUs (future, ~2-3 days)
-True parallel chunk inference using torch.multiprocessing or subprocess-per-GPU.
-Not yet implemented — current state: 8 independent workers, each handles one job sequentially.
+### Priority 5 — xDiT 4-GPU Sequence Parallelism (NEXT BIG ITEM, ~2-3 days)
+**Goal**: 23 min → ~7 min per 15s video at full BF16 quality. 2 concurrent jobs.
+Full implementation plan in `implementation_plan.md` § Phase 3.
+- Sections 3.1–3.6 cover: Dockerfile, gunicorn GPU groups, xDiT pipeline wrapper,
+  torch.distributed compatibility, fallback to NF4, and smoke test commands.
+- Speed estimate: ~3.5× faster than current (GCP baseline), ~2.5× faster than Vultr NF4.
 
 ### RESOLVED (GCP) — Phase 1 NVMe SSD
 Vultr NVMe block storage already solves the 30min model load issue on GCP.
