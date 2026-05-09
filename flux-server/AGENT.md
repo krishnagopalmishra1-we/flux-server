@@ -13,7 +13,7 @@ Treat `flux-server/` as the production codebase. Root-level `app/` and older roo
 - Image pipeline in `app/pipeline.py`
 - Video pipeline in `app/pipelines/video_pipeline.py`
 - Shared GPU runtime coordinator in `app/runtime.py`
-- In-memory jobs and SSE in `app/job_queue.py`
+- Job queue/state in `app/job_queue.py`; Redis is the multi-worker backend, memory is local fallback
 - Public Hyperforge AI frontend in `app/static/`
 
 ## Current Model Registry
@@ -42,18 +42,18 @@ Removed from the active surface:
 - Animation generation
 - Broken legacy tabs wired to non-existent backend endpoints
 
-## Hard Runtime Constraints
+## Runtime Shapes
 
-- One A100 40GB GPU
-- Limited disk
-- No extra GPU
-- No extra storage
-- Keep only one heavy model resident in VRAM at a time
+- GCP A100 40GB: single-worker testing, one heavy model resident in VRAM at a time.
+- 8x80GB Hyperforge testing: `GPUS_PER_JOB=4`, two Gunicorn workers, Redis job backend, two concurrent WAN 14B xDiT jobs split across GPU groups.
 
 The code now reflects this:
 
 - Image and video work serialize through a shared GPU coordinator.
 - Video validation rejects settings outside per-model A100-safe limits.
+- Redis mode persists job records at `job:{job_id}` and claims queued work only through the `job_queue` sorted set.
+- Cancellation is cross-worker: DELETE writes `cancel_flag=true`; diffusers callbacks and xDiT subprocess loops re-check it.
+- Stale Redis `processing` jobs older than the watchdog threshold are marked failed at worker startup.
 - Disk-budget checks run before large LoRA writes.
 - Output cleanup is part of normal runtime hygiene.
 
@@ -145,6 +145,10 @@ These defaults are there to stay inside one A100 40GB plus limited disk, not bec
 - The API path keeps `/api/video/generate` unchanged
 - Gunicorn workers own fixed GPU groups via `CUDA_VISIBLE_DEVICES`
 - WAN 14B xDiT jobs run through `torchrun` subprocesses launched by `app/pipelines/video_pipeline.py`
+- Each xDiT job gets a free localhost master port; do not reintroduce a fixed `29500`.
+- xDiT subprocesses must be started as a new session and killed by process group on cancel, timeout, or cleanup.
+- `XDIT_TIMEOUT_SECONDS` defaults to `14400`.
+- The helper script prints actionable stderr remediation and exits 1 if `xfuser` imports fail.
 - Standalone validation tool: `tools/wan14b_xdit_infer.py`
 
 ## Deployment Context

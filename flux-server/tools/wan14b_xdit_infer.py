@@ -60,10 +60,21 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Trigger model registration side effects before importing the runner.
-    import xfuser.model_executor.models.runner_models  # noqa: F401
-    from xfuser.runner import xFuserModelRunner
-    from xfuser.core.utils.runner_utils import is_last_process
+    try:
+        # Trigger model registration side effects before importing the runner.
+        import xfuser.model_executor.models.runner_models  # noqa: F401
+        from xfuser.runner import xFuserModelRunner
+        from xfuser.core.utils.runner_utils import is_last_process
+    except Exception as exc:
+        print(
+            "xDiT import failed. Install the xDiT runtime in the container "
+            "(requirements.txt includes git+https://github.com/xdit-project/xDiT.git), "
+            "then rebuild the image. If this is an offline host, build once with network "
+            f"access and preserve the virtualenv. Original error: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1) from exc
 
     height, width = RESOLUTION_MAP[args.resolution]
     height = (height // 32) * 32

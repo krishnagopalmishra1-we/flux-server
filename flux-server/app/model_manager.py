@@ -310,10 +310,11 @@ class MultiModelManager:
     # HDD tier: fallback for large models (WAN 14B = 118GB) or low-priority ones.
     SSD_PRIORITY = {"flux-1-dev", "wan-t2v-1.3b", "hunyuan-video"}
 
-    def get_cache_dir(self, model_name: str) -> str:
+    @classmethod
+    def get_cache_dir(cls, model_name: str) -> str:
         """Return the appropriate cache directory for a model based on disk tier."""
         settings = get_settings()
-        if model_name in self.SSD_PRIORITY:
+        if model_name in cls.SSD_PRIORITY:
             return settings.cache_dir_ssd
         return settings.cache_dir
     

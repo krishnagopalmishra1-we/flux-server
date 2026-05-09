@@ -1,4 +1,16 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   flux-server:
     build: .
     user: "0:0"
@@ -19,6 +31,8 @@ services:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - VIDEO_PARALLEL_BACKEND=auto
       - GPUS_PER_JOB=4
+      - JOB_BACKEND=redis
+      - REDIS_URL=redis://redis:6379/0
       # Set HF_OFFLINE=true in .env after first successful model download
       # to eliminate HF network metadata round-trips on every load.
     env_file:
@@ -32,8 +46,12 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
+  redis_data:
   outputs:
   # SSD-resident model cache — survives container rebuilds, stored on boot disk.
   model_cache_ssd:

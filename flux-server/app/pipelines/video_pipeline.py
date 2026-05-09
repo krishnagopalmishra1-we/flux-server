@@ -26,10 +26,14 @@ import os
 import base64
 import logging
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import importlib
+import threading
+import queue
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
@@ -220,6 +224,29 @@ class VideoPipeline:
             raise FileNotFoundError(f"xDiT runner script not found: {script_path}")
         return script_path
 
+    def _allocate_master_port(self) -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    def _terminate_process_group(self, process: subprocess.Popen) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                process.terminate()
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=20)
+        except Exception:
+            try:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                process.kill()
+
     def _run_xdit_subprocess(
         self,
         *,
@@ -235,18 +262,21 @@ class VideoPipeline:
         chunk_overlap: int,
         progress_callback: Optional[Callable[[float], None]],
         job_id: Optional[str],
+        job=None,
     ) -> Dict[str, Any]:
         script_path = self._xdit_script_path()
         tmp_dir = Path(tempfile.mkdtemp(prefix="wan14b_xdit_"))
         output_path = tmp_dir / "wan14b_xdit.mp4"
         result_path = tmp_dir / "wan14b_xdit.json"
         stderr_path = tmp_dir / "wan14b_xdit.stderr.log"
+        master_port = self._allocate_master_port()
+        timeout_seconds = int(get_settings().xdit_timeout_seconds or 14400)
 
         cmd = [
             "torchrun",
             f"--nproc_per_node={min(self._visible_gpu_count(), int(get_settings().gpus_per_job or 4))}",
             "--master_addr=127.0.0.1",
-            "--master_port=29500",
+            f"--master_port={master_port}",
             str(script_path),
             "--prompt", prompt,
             "--negative-prompt", negative_prompt or "",
@@ -265,6 +295,9 @@ class VideoPipeline:
 
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
+        if get_settings().hf_offline:
+            env["HF_HUB_OFFLINE"] = "1"
+            env["TRANSFORMERS_OFFLINE"] = "1"
         repo_root = str(Path(__file__).resolve().parents[2])
         env["PYTHONPATH"] = repo_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
 
@@ -282,45 +315,79 @@ class VideoPipeline:
             errors="replace",
             env=env,
             cwd=repo_root,
+            start_new_session=(os.name != "nt"),
         )
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
-        progress_pct = 10.0
+        line_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+
+        def _drain_pipe(name: str, stream) -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    if not line:
+                        break
+                    line_queue.put((name, line.rstrip()))
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        drain_threads = []
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            if stream is not None:
+                thread = threading.Thread(target=_drain_pipe, args=(name, stream), daemon=True)
+                thread.start()
+                drain_threads.append(thread)
         try:
             while process.poll() is None:
-                if process.stdout is not None:
-                    line = process.stdout.readline()
-                    if line:
-                        stdout_lines.append(line.rstrip())
-                        logger.info("[xdit] %s", line.rstrip())
-                if process.stderr is not None:
-                    err_line = process.stderr.readline()
-                    if err_line:
-                        stderr_lines.append(err_line.rstrip())
-                        logger.warning("[xdit] %s", err_line.rstrip())
+                while True:
+                    try:
+                        name, line = line_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if name == "stdout":
+                        stdout_lines.append(line)
+                        logger.info("[xdit] %s", line)
+                    else:
+                        stderr_lines.append(line)
+                        logger.warning("[xdit] %s", line)
+                if job is not None and job.cancel_requested():
+                    self._terminate_process_group(process)
+                    raise InterruptedError("Job cancelled by user request")
+                elapsed = time.perf_counter() - start_time
+                if elapsed > timeout_seconds:
+                    self._terminate_process_group(process)
+                    raise TimeoutError(f"xDiT subprocess timed out after {timeout_seconds}s")
                 if progress_callback:
-                    progress_pct = min(progress_pct + 1.5, 88.0)
+                    progress_pct = min(10.0 + (elapsed / timeout_seconds) * 80.0, 90.0)
                     progress_callback(progress_pct)
-                time.sleep(5.0)
+                time.sleep(2.0)
 
-            stdout_tail, stderr_tail = process.communicate(timeout=30)
-            if stdout_tail:
-                stdout_lines.extend(line for line in stdout_tail.splitlines() if line.strip())
-            if stderr_tail:
-                stderr_lines.extend(line for line in stderr_tail.splitlines() if line.strip())
+            for thread in drain_threads:
+                thread.join(timeout=5.0)
+            while True:
+                try:
+                    name, line = line_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if name == "stdout":
+                    stdout_lines.append(line)
+                else:
+                    stderr_lines.append(line)
 
             if process.returncode != 0:
-                stderr_path.write_text("\n".join(stderr_lines[-200:]), encoding="utf-8")
+                stderr_tail_text = "\n".join(stderr_lines[-200:])
+                stderr_path.write_text(stderr_tail_text, encoding="utf-8")
                 raise RuntimeError(
                     f"xDiT subprocess failed with exit code {process.returncode}. "
-                    f"See {stderr_path} for stderr tail."
+                    f"stderr tail: {stderr_tail_text[-2000:] or '(empty)'}"
                 )
 
             if not result_path.exists() or not output_path.exists():
                 raise RuntimeError("xDiT subprocess completed without producing expected output artifacts.")
 
             result_data = json.loads(result_path.read_text(encoding="utf-8"))
-            video_path = output_store.save_file_from_path(str(output_path), "video", job_id)
             import imageio.v3 as iio
             first_frame = None
             try:
@@ -329,6 +396,7 @@ class VideoPipeline:
                 first_frame = None
 
             thumbnail_b64 = self._frame_to_b64(first_frame)
+            video_path = output_store.save_file_from_path(str(output_path), "video", job_id)
             if progress_callback:
                 progress_callback(100.0)
 
@@ -345,7 +413,10 @@ class VideoPipeline:
             }
         finally:
             if process.poll() is None:
-                process.kill()
+                self._terminate_process_group(process)
+            for thread in drain_threads:
+                thread.join(timeout=1.0)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ──────────────────────────────────────────────
     #  Model Loading
@@ -380,7 +451,7 @@ class VideoPipeline:
 
             # Use model_manager as single source of truth for cache tier selection.
             from app.model_manager import MultiModelManager
-            cache_dir = MultiModelManager().get_cache_dir(model_name)
+            cache_dir = MultiModelManager.get_cache_dir(model_name)
 
             logger.info(f"Loading video model: {model_name} (cache={cache_dir})")
             try:
@@ -454,8 +525,11 @@ class VideoPipeline:
                     **({"token": settings.hf_token} if settings.hf_token else {}),
                 )
                 logger.info("  Transformer_2: NF4 quantized (~7 GB)")
-            except Exception:
-                pass  # WAN 2.1 has no transformer_2
+            except Exception as exc:
+                if "Wan2.2" in model_id:
+                    logger.warning("  WAN 2.2 transformer_2 missing or failed to load: %s", exc)
+                else:
+                    logger.info("  transformer_2 not present for %s", model_id)
             pipe_kwargs = {"transformer": transformer}
             if transformer_2 is not None:
                 pipe_kwargs["transformer_2"] = transformer_2
@@ -508,8 +582,11 @@ class VideoPipeline:
                     **({"token": settings.hf_token} if settings.hf_token else {}),
                 )
                 logger.info("  Transformer_2: NF4 quantized (~7 GB)")
-            except Exception:
-                pass  # not all I2V versions have transformer_2
+            except Exception as exc:
+                if "Wan2.2" in model_id:
+                    logger.warning("  WAN 2.2 I2V transformer_2 missing or failed to load: %s", exc)
+                else:
+                    logger.info("  transformer_2 not present for %s", model_id)
             pipe_kwargs = {"transformer": transformer}
             if transformer_2 is not None:
                 pipe_kwargs["transformer_2"] = transformer_2
@@ -734,6 +811,7 @@ class VideoPipeline:
                 chunk_overlap=chunk_overlap,
                 progress_callback=progress_callback,
                 job_id=job_id,
+                job=job,
             )
 
         self._log_backend_choice(model_name, "diffusers", xdit_detail)
@@ -879,6 +957,8 @@ class VideoPipeline:
         fps: int = 16,
         guidance_scale: float = 5.0,
         num_inference_steps: int = 30,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
         seed: Optional[int] = None,
         lora_name: Optional[str] = None,
         lora_scale: float = 1.0,
@@ -894,6 +974,8 @@ class VideoPipeline:
                 "fps": fps,
                 "guidance_scale": guidance_scale,
                 "num_inference_steps": num_inference_steps,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
             },
         )
         resolution = params["resolution"]
@@ -901,6 +983,8 @@ class VideoPipeline:
         fps = params["fps"]
         guidance_scale = params["guidance_scale"]
         num_inference_steps = params["num_inference_steps"]
+        chunk_size = params["chunk_size"]
+        chunk_overlap = params["chunk_overlap"]
 
         can_use_xdit, xdit_detail = self._can_use_xdit_backend(model_name)
         if can_use_xdit and lora_name:
@@ -917,10 +1001,11 @@ class VideoPipeline:
                 guidance_scale=guidance_scale,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
-                chunk_size=params["chunk_size"],
-                chunk_overlap=params["chunk_overlap"],
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
                 progress_callback=progress_callback,
                 job_id=job_id,
+                job=job,
             )
 
         self._log_backend_choice(model_name, "diffusers", xdit_detail)
@@ -1333,7 +1418,9 @@ def _make_step_callback(
 
     def _cb(pipeline, step_index: int, timestep, callback_kwargs: dict):
         # Check cancellation flag — raises to abort inference loop.
-        if job is not None and getattr(job, 'cancel_flag', False):
+        if job is not None and (
+            job.cancel_requested() if hasattr(job, "cancel_requested") else getattr(job, "cancel_flag", False)
+        ):
             raise InterruptedError("Job cancelled by user request")
         pct = start + (step_index / total_steps) * (end - start)
         try:

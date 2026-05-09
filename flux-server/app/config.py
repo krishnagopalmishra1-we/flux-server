@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # Job queue
     max_queue_size: int = 50
     max_jobs_per_user: int = 5
+    job_backend: str = "memory"  # memory | redis
+    redis_url: str = "redis://redis:6379/0"
+    job_result_ttl_seconds: int = 86400
+    job_watchdog_timeout_seconds: int = 3600
 
     # Feature flags
     enable_video: bool = True
@@ -65,6 +69,9 @@ class Settings(BaseSettings):
     default_video_frames: int = 33
     video_parallel_backend: str = "auto"  # auto | xdit | disabled
     gpus_per_job: int = 4
+    xdit_timeout_seconds: int = 14400
+    max_request_body_mb: int = 25
+    max_source_image_b64_length: int = 25 * 1024 * 1024
 
     class Config:
         env_file = ".env"

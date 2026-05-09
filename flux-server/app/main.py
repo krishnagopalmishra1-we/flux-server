@@ -5,9 +5,10 @@ import time
 import shutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pathlib import Path
 import hashlib
 from app.schemas import (
@@ -34,6 +35,23 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class ContentLengthLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        settings = get_settings()
+        max_bytes = int(settings.max_request_body_mb * 1024 * 1024)
+        content_length = request.headers.get("content-length")
+        try:
+            request_bytes = int(content_length) if content_length else 0
+        except ValueError:
+            request_bytes = 0
+        if request_bytes > max_bytes:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body too large. Limit is {settings.max_request_body_mb}MB."},
+            )
+        return await call_next(request)
 
 
 def _validate_lora_upload(safe_name: str, contents: bytes) -> None:
@@ -169,6 +187,8 @@ def _handle_video_job(job) -> dict:
                 fps=payload["fps"],
                 guidance_scale=payload["guidance_scale"],
                 num_inference_steps=payload["num_inference_steps"],
+                chunk_size=payload["chunk_size"],
+                chunk_overlap=payload["chunk_overlap"],
                 seed=payload.get("seed"),
                 lora_name=payload.get("lora_name"),
                 lora_scale=payload.get("lora_scale", 1.0),
@@ -198,6 +218,12 @@ async def lifespan(app: FastAPI):
 
     # Create output directories
     settings = get_settings()
+    if job_queue.is_redis_backend:
+        try:
+            await job_queue.start()
+        except Exception as exc:
+            logger.critical("Fatal: Redis job backend is configured but unreachable: %s", exc)
+            raise
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.output_dir).joinpath("image").mkdir(exist_ok=True)
     Path(settings.output_dir).joinpath("video").mkdir(exist_ok=True)
@@ -209,7 +235,7 @@ async def lifespan(app: FastAPI):
 
     # Keep startup fast and responsive; launch background model pre-loading
     # while server immediately becomes ready to accept requests.
-    logger.info("Server ready to accept requests (Wan 2.2 pre-loading in background)")
+    logger.info("Server ready to accept requests (video models load on first request)")
     preload_task = asyncio.create_task(_preload_video_model_background())
     yield
     # Cleanup on shutdown
@@ -257,6 +283,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+app.add_middleware(ContentLengthLimitMiddleware)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -270,6 +297,7 @@ async def health():
         vram_used_gb=gpu["used_gb"],
         model_loaded=flux_pipeline.is_loaded,
         current_model=flux_pipeline.model_manager.current_model,
+        queue=job_queue.queue_stats(),
     )
 
 
@@ -529,18 +557,9 @@ async def drain_queue(request: Request):
     if not settings.admin_api_key or admin_key != settings.admin_api_key:
         raise HTTPException(status_code=403, detail="Invalid or missing Admin-Key.")
 
-    cancelled = 0
-    flagged = 0
-    for job in list(job_queue._jobs.values()):
-        if job.status == JobStatus.QUEUED:
-            job.status = JobStatus.CANCELLED
-            job.completed_at = time.time()
-            job.error_message = "Job cancelled by admin queue drain."
-            job_queue._notify_terminal(job)
-            cancelled += 1
-        elif job.status == JobStatus.PROCESSING:
-            job.cancel_flag = True
-            flagged += 1
+    drained = job_queue.drain()
+    cancelled = drained["cancelled"]
+    flagged = drained["flagged"]
 
     logger.warning(f"Admin queue drain: cancelled {cancelled} queued, flagged {flagged} processing")
     return {"cancelled": cancelled, "flagged_for_cancel": flagged}
@@ -575,6 +594,14 @@ async def stream_job_progress(job_id: str, request: Request):
                     payload["result"] = current.result
                     payload["error"] = current.error_message
                 yield f"data: {json.dumps(payload)}\n\n"
+                if (
+                    job_queue.is_redis_backend
+                    and current.status.value == "processing"
+                    and current.owner_id
+                    and current.owner_id != job_queue.worker_id
+                ):
+                    yield f"data: {json.dumps({'mode': 'poll', 'status': current.status.value, 'progress': current.progress})}\n\n"
+                    return
 
             # Stream updates until terminal state or client disconnect
             while True:

@@ -8,7 +8,13 @@ All schemas use Pydantic v2 for validation.
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any
 import uuid
+import base64
+import binascii
+import io
 
+from PIL import Image
+
+from app.config import get_settings
 from app.video_defaults import get_video_model_defaults
 
 
@@ -62,6 +68,7 @@ class HealthResponse(BaseModel):
     vram_used_gb: float = 0.0
     model_loaded: bool = False
     current_model: str = ""
+    queue: Dict[str, Any] = Field(default_factory=dict)
 
 
 
@@ -86,7 +93,7 @@ class VideoGenerateRequest(BaseModel):
     num_inference_steps: Optional[int] = Field(None, ge=10, le=100)
     seed: Optional[int] = None
     # For Image-to-Video: base64-encoded source image
-    source_image_b64: Optional[str] = None
+    source_image_b64: Optional[str] = Field(None, max_length=25 * 1024 * 1024)
     # LoRA support for Wan 2.2 models
     lora_name: Optional[str] = None
     lora_scale: float = Field(1.0, ge=0.0, le=2.0)
@@ -101,6 +108,27 @@ class VideoGenerateRequest(BaseModel):
     @classmethod
     def sanitize_prompt(cls, v: str) -> str:
         return "".join(c for c in v if c.isprintable())
+
+    @field_validator("source_image_b64")
+    @classmethod
+    def validate_source_image_b64(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return v
+        max_len = get_settings().max_source_image_b64_length
+        if len(v) > max_len:
+            raise ValueError(f"source_image_b64 exceeds maximum length of {max_len} characters.")
+        try:
+            img_bytes = base64.b64decode(v, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("source_image_b64 must be valid base64 image data.") from exc
+        if len(img_bytes) > 18 * 1024 * 1024:
+            raise ValueError("source_image_b64 decoded image is too large.")
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as img:
+                img.verify()
+        except Exception as exc:
+            raise ValueError("source_image_b64 must decode to a valid image.") from exc
+        return v
 
     @model_validator(mode="after")
     def enforce_a100_limits(self) -> "VideoGenerateRequest":
@@ -225,6 +253,9 @@ class QueueStatusResponse(BaseModel):
     failed: int = 0
     total: int = 0
     max_queue_size: int = 50
+    backend: str = "memory"
+    worker_id: str = ""
+    redis_url: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════

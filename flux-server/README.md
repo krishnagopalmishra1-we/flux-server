@@ -1,6 +1,6 @@
 # Hyperforge AI
 
-> Bright, public-facing image and video studio built on FastAPI, FLUX, Wan, and HunyuanVideo, tuned for a single A100 40GB GPU.
+> Bright, public-facing image and video studio built on FastAPI, FLUX, Wan, HunyuanVideo, Redis, and optional xDiT multi-GPU WAN 14B inference.
 
 ## What Is Running
 
@@ -8,16 +8,14 @@
 
 - Image generation at `POST /generate`
 - Video generation at `POST /api/video/generate`
-- Job polling, queue state, and SSE progress under `/api/jobs/*`
+- Redis-backed job polling, queue state, cancellation, and SSE/poll progress under `/api/jobs/*`
 - LoRA listing and upload endpoints for image and video adapters
 - The Hyperforge AI web UI at `/`, `/image`, `/video`, `/queue`, and `/library`
 
-The service is designed for fixed constraints:
+The service supports two runtime shapes:
 
-- One A100 40GB GPU
-- Limited disk
-- No extra GPU or storage expansion
-- One model resident in VRAM at a time
+- Single-worker A100 testing, using the in-memory queue if `JOB_BACKEND=memory`
+- Multi-worker 8x80GB testing, using `JOB_BACKEND=redis`, `GPUS_PER_JOB=4`, and two Gunicorn workers for two concurrent WAN 14B xDiT jobs
 
 ## Current Model Set
 
@@ -35,7 +33,7 @@ The service is designed for fixed constraints:
 | Key | Backend model | Runtime notes |
 |---|---|---|
 | `wan-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | Default video model. Fastest, safest option on A100. Default output is `480p`, short clips. |
-| `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | NF4 dual-transformer path. Higher quality, stricter admission limits. |
+| `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | Prefers BF16 xDiT on 4x80GB GPU groups, falls back to NF4 diffusers elsewhere. |
 | `wan-i2v-14b` | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | NF4 image-to-video path. Requires `source_image_b64`. |
 | `hunyuan-video` | `hunyuanvideo-community/HunyuanVideo` | 720p-capable path with NF4 transformer and CPU-offloaded text encoder. |
 
@@ -44,6 +42,9 @@ The service is designed for fixed constraints:
 - Image and video pipelines share a single GPU runtime coordinator.
 - Image and video generations do not run concurrently on GPU.
 - Video validation is model-aware and rejects settings that are unsafe for A100 40GB.
+- In Redis mode, queued jobs are claimed through one Redis sorted set so multiple workers cannot claim the same job.
+- Processing job state, progress, ETA, cancellation flags, and terminal results are persisted to Redis.
+- xDiT subprocesses use per-job localhost ports, process-group cleanup, a four-hour default timeout, and temp-directory cleanup.
 - Long videos stream frame output to disk instead of retaining all encoded frames in RAM.
 - Output files, temp files, uploads, and model cache usage are guarded for limited disk environments.
 
@@ -92,6 +93,8 @@ API_KEYS=
 LORA_DIR=/mnt/hf-cache/loras
 VIDEO_LORA_DIR=/mnt/hf-cache/video_loras
 WAN_DEFAULT_VARIANT=1.3b
+JOB_BACKEND=redis
+REDIS_URL=redis://redis:6379/0
 ```
 
 Then verify:

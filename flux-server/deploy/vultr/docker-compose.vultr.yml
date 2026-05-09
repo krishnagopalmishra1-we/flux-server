@@ -7,6 +7,18 @@
 # Do NOT set CUDA_VISIBLE_DEVICES here — workers manage it themselves.
 
 services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - /mnt/model-disk/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   flux-server:
     build: .
     user: "0:0"
@@ -21,6 +33,8 @@ services:
       - /mnt/model-disk/video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - JOB_BACKEND=redis
+      - REDIS_URL=redis://redis:6379/0
       # CUDA_VISIBLE_DEVICES intentionally omitted — gunicorn post_fork assigns per-worker GPU.
       # Override NUM_WORKERS to limit concurrency (default: auto-detected GPU count).
       # Override GPU_COUNT if nvidia-smi is unavailable at startup.
@@ -35,6 +49,9 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
