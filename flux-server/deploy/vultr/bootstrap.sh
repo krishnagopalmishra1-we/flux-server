@@ -96,6 +96,9 @@ VIDEO_LORA_DIR=/mnt/hf-cache/video_loras
 WAN_DEFAULT_VARIANT=1.3b
 OUTPUT_DIR=/mnt/outputs
 OUTPUT_TTL_HOURS=168
+# On Vultr all storage is NVMe block — no SSD/HDD split needed.
+# Override cache_dir_ssd to the same persistent mount so models survive rebuilds.
+CACHE_DIR_SSD=/mnt/hf-cache
 ENVEOF
   echo "  .env created — set HF_TOKEN before starting"
 fi
