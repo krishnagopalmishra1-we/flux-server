@@ -1,0 +1,39 @@
+# Vultr Cloud GPU deployment compose file.
+# bootstrap.sh copies this to flux-server/docker-compose.yml on the instance.
+# All models live on the attached block storage volume at /mnt/model-disk.
+# A100 80GB = full 80GB available to a single container — no CUDA_VISIBLE_DEVICES slice needed.
+
+services:
+  flux-server:
+    build: .
+    user: "0:0"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Block storage (NVMe-backed on Vultr) — all model families live here
+      - /mnt/model-disk/hf-cache:/mnt/hf-cache
+      - /mnt/model-disk/outputs:/mnt/outputs
+      # LoRA adapters — bind-mount so uploads survive container rebuilds
+      - /mnt/model-disk/loras:/app/loras
+      - /mnt/model-disk/video_loras:/app/video_loras
+    environment:
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      # Vultr GPU instances expose all GPUs — single A100 80GB plan has 1 GPU
+      - CUDA_VISIBLE_DEVICES=0
+    env_file:
+      - .env
+    shm_size: '4g'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
