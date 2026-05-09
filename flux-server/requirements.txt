@@ -37,3 +37,7 @@ requests==2.32.3
 pandas==2.2.2
 tqdm==4.66.5
 aiofiles==23.2.1
+
+# WAN 14B quality backend on 4x80GB hosts.
+# Use source because upstream WAN support landed after xfuser 0.4.5.
+git+https://github.com/xdit-project/xDiT.git

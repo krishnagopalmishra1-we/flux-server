@@ -63,9 +63,12 @@ class Settings(BaseSettings):
     wan_default_variant: str = "1.3b"   # "1.3b" or "14b"
     default_video_fps: int = 16
     default_video_frames: int = 33
+    video_parallel_backend: str = "auto"  # auto | xdit | disabled
+    gpus_per_job: int = 4
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 @lru_cache

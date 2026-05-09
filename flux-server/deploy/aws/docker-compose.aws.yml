@@ -1,7 +1,7 @@
 # AWS deployment compose file.
 # bootstrap.sh copies this to flux-server/docker-compose.yml on the EC2 instance.
 # All models live on the persistent EBS data disk mounted at /mnt/model-disk.
-# CUDA_VISIBLE_DEVICES=0 restricts to one A100 on p4d.24xlarge (8x A100).
+# Configure this host for grouped 4-GPU WAN 14B xDiT jobs.
 
 services:
   flux-server:
@@ -20,15 +20,16 @@ services:
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       # Use GPU 0 only — p4d.24xlarge has 8 A100s, we want exactly one
-      - CUDA_VISIBLE_DEVICES=0
+      - VIDEO_PARALLEL_BACKEND=auto
+      - GPUS_PER_JOB=4
     env_file:
       - .env
-    shm_size: '2g'
+    shm_size: '16g'
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     restart: unless-stopped

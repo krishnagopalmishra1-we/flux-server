@@ -9,8 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any
 import uuid
 
-from app.config import get_settings as _get_settings
-_cfg = _get_settings()
+from app.video_defaults import get_video_model_defaults
 
 
 # ═══════════════════════════════════════════════════
@@ -76,15 +75,15 @@ class VideoGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     model_name: str = Field("wan-t2v-1.3b")
     negative_prompt: Optional[str] = Field(None, max_length=1000)
-    num_frames: int = Field(_cfg.default_video_frames, ge=16, le=480)
-    fps: int = Field(_cfg.default_video_fps, ge=8, le=30)
+    num_frames: Optional[int] = Field(None, ge=16, le=480)
+    fps: Optional[int] = Field(None, ge=8, le=30)
     # A100-safe default: 480p short clips on Wan 1.3B. Higher tiers are
     # explicitly model-gated below to avoid wasting scarce GPU/disk budget.
-    resolution: str = Field("480p", pattern=r"^(480p|540p|720p)$")
+    resolution: Optional[str] = Field(None, pattern=r"^(480p|540p|720p)$")
     # guidance_scale=5.0: WAN optimal for 1.3B. Higher values cause saturation artifacts.
-    guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
+    guidance_scale: Optional[float] = Field(None, ge=0.0, le=20.0)
     # 30 steps: good quality/speed balance for all models.
-    num_inference_steps: int = Field(30, ge=10, le=100)
+    num_inference_steps: Optional[int] = Field(None, ge=10, le=100)
     seed: Optional[int] = None
     # For Image-to-Video: base64-encoded source image
     source_image_b64: Optional[str] = None
@@ -95,8 +94,8 @@ class VideoGenerateRequest(BaseModel):
     # chunk_size=49: avoids quadratic attention OOM at 81fr (AGENT.md §Speed Optimization).
     # chunk_overlap=8: _blend_overlap only fades EDGE_FADE=4 frames; 16 overlap was
     #   wasting 12 inference frames per chunk with no quality benefit.
-    chunk_size: int = Field(49, ge=16, le=81)
-    chunk_overlap: int = Field(8, ge=0, le=30)
+    chunk_size: Optional[int] = Field(None, ge=16, le=81)
+    chunk_overlap: Optional[int] = Field(None, ge=0, le=30)
 
     @field_validator("prompt")
     @classmethod
@@ -105,52 +104,34 @@ class VideoGenerateRequest(BaseModel):
 
     @model_validator(mode="after")
     def enforce_a100_limits(self) -> "VideoGenerateRequest":
-        limits = {
-            "wan-t2v-1.3b": {
-                "resolutions": {"480p"},
-                "max_frames": 240,
-                "max_steps": 40,
-                "max_chunk": 49,
-                "max_overlap": 16,
-            },
-            "wan-t2v-14b": {
-                "resolutions": {"480p", "540p", "720p"},
-                "max_frames": 129,
-                "max_steps": 50,
-                "max_chunk": 49,
-                "max_overlap": 16,
-            },
-            "wan-i2v-14b": {
-                "resolutions": {"480p", "540p", "720p"},
-                "max_frames": 81,
-                "max_steps": 50,
-                "max_chunk": 49,
-                "max_overlap": 16,
-            },
-            "hunyuan-video": {
-                "resolutions": {"540p", "720p"},
-                "max_frames": 129,
-                "max_steps": 60,
-                "max_chunk": 49,
-                "max_overlap": 16,
-            },
-        }
-        cfg = limits.get(self.model_name)
-        if cfg is None:
-            raise ValueError(f"Unsupported video model: {self.model_name}")
+        cfg = get_video_model_defaults(self.model_name)
+        if self.resolution is None:
+            self.resolution = cfg["default_resolution"]
+        if self.num_frames is None:
+            self.num_frames = cfg["default_num_frames"]
+        if self.fps is None:
+            self.fps = cfg["default_fps"]
+        if self.guidance_scale is None:
+            self.guidance_scale = cfg["default_guidance_scale"]
+        if self.num_inference_steps is None:
+            self.num_inference_steps = cfg["default_steps"]
+        if self.chunk_size is None:
+            self.chunk_size = cfg["default_chunk_size"]
+        if self.chunk_overlap is None:
+            self.chunk_overlap = cfg["default_chunk_overlap"]
         if self.source_image_b64 and self.model_name != "wan-i2v-14b":
             raise ValueError("Image-to-video requires model_name='wan-i2v-14b'.")
-        if self.resolution not in cfg["resolutions"]:
-            allowed = ", ".join(sorted(cfg["resolutions"]))
+        if self.resolution not in cfg["allowed_resolutions"]:
+            allowed = ", ".join(sorted(cfg["allowed_resolutions"]))
             raise ValueError(f"{self.model_name} supports resolution(s): {allowed}.")
         if self.num_frames > cfg["max_frames"]:
-            raise ValueError(f"{self.model_name} is capped at {cfg['max_frames']} frames on A100 40GB.")
+            raise ValueError(f"{self.model_name} is capped at {cfg['max_frames']} frames.")
         if self.num_inference_steps > cfg["max_steps"]:
             raise ValueError(f"{self.model_name} is capped at {cfg['max_steps']} inference steps.")
-        if self.chunk_size > cfg["max_chunk"]:
-            raise ValueError(f"{self.model_name} is capped at chunk_size={cfg['max_chunk']}.")
-        if self.chunk_overlap > cfg["max_overlap"]:
-            raise ValueError(f"{self.model_name} is capped at chunk_overlap={cfg['max_overlap']}.")
+        if self.chunk_size > cfg["max_chunk_size"]:
+            raise ValueError(f"{self.model_name} is capped at chunk_size={cfg['max_chunk_size']}.")
+        if self.chunk_overlap > cfg["max_chunk_overlap"]:
+            raise ValueError(f"{self.model_name} is capped at chunk_overlap={cfg['max_chunk_overlap']}.")
         return self
 
     @model_validator(mode="after")
@@ -263,6 +244,12 @@ class ModelInfo(BaseModel):
     max_steps: int
     default_steps: int
     default_guidance_scale: float
+    default_resolution: Optional[str] = None
+    default_num_frames: Optional[int] = None
+    default_fps: Optional[int] = None
+    default_chunk_size: Optional[int] = None
+    default_chunk_overlap: Optional[int] = None
+    preferred_backend: Optional[str] = None
     loaded: bool = False
 
 

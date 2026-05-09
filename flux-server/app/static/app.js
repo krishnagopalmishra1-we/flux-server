@@ -163,6 +163,7 @@ function escapeHtml(v) {
 function formatMs(ms)  { return ms  ? `${(ms/1000).toFixed(2)}s` : "-"; }
 function formatDur(s)  { if (!s) return "-"; const m=Math.floor(s/60),r=Math.round(s%60); return m>0?`${m}m ${r}s`:`${r}s`; }
 function activeModel() { return state.models.find(m=>m.name===state.form.model_name)||null; }
+function activeVideoModel() { return state.videoModels.find(m=>m.name===state.videoForm.model_name)||null; }
 function imageSrc(r)   { return r?.image_base64 ? `data:image/png;base64,${r.image_base64}` : ""; }
 
 function selectedImageStyle() { return IMAGE_STYLES.find(s=>s.id===state.form.style_id)||IMAGE_STYLES[0]; }
@@ -260,8 +261,20 @@ async function loadModels() {
       state.form.num_inference_steps = info.default_steps ?? state.form.num_inference_steps;
       state.form.guidance_scale = info.default_guidance_scale ?? state.form.guidance_scale;
     }
+    applyVideoModelDefaults(state.videoForm.model_name, { force: true });
     await Promise.all([loadLoras(cur), loadVideoLoras()]);
   } catch { state.models=[]; render(); }
+}
+
+function applyVideoModelDefaults(modelName, opts = {}) {
+  const info = state.videoModels.find(m => m.name === modelName);
+  if (!info) return;
+  state.videoForm.model_name = modelName;
+  if (opts.force || !state.videoForm.resolution) state.videoForm.resolution = info.default_resolution || state.videoForm.resolution;
+  if (opts.force || !state.videoForm.num_frames) state.videoForm.num_frames = info.default_num_frames ?? state.videoForm.num_frames;
+  if (opts.force || !state.videoForm.fps) state.videoForm.fps = info.default_fps ?? state.videoForm.fps;
+  state.videoForm.num_inference_steps = info.default_steps ?? state.videoForm.num_inference_steps;
+  state.videoForm.guidance_scale = info.default_guidance_scale ?? state.videoForm.guidance_scale;
 }
 
 async function loadLoras(modelName) {
@@ -813,6 +826,7 @@ function renderImageTab(currentModel, currentImage) {
 
 function renderVideoTab() {
   const f = state.videoForm;
+  const videoModel = activeVideoModel();
   const latestVideoJob = state.jobs.find(j=>j.job_type==="video"&&
     (j.status==="completed"||j.status==="processing"||j.status==="queued"));
 
@@ -843,6 +857,7 @@ function renderVideoTab() {
           <div class="field"><label>Resolution</label>
             <select id="v-resolution">
               <option value="480p" ${f.resolution==="480p"?"selected":""}>480p (848x480)</option>
+              <option value="540p" ${f.resolution==="540p"?"selected":""}>540p (960x544)</option>
               <option value="720p" ${f.resolution==="720p"?"selected":""}>720p (1280x720)</option>
             </select></div>
           <div class="field"><label>FPS</label>
@@ -858,7 +873,7 @@ function renderVideoTab() {
               ${p.label}<small>${p.frames} frames</small></button>`).join("")}</div></div>
 
         <div class="field-group two-col">
-          <div class="field"><label>Steps</label><input id="v-steps" type="number" min="10" max="50" value="${f.num_inference_steps}" /></div>
+          <div class="field"><label>Steps</label><input id="v-steps" type="number" min="${videoModel?.min_steps||10}" max="${videoModel?.max_steps||60}" value="${f.num_inference_steps}" /></div>
           <div class="field"><label>Guidance</label><input id="v-guidance" type="number" min="0" max="20" step="0.5" value="${f.guidance_scale}" /></div>
         </div>
 
@@ -1200,7 +1215,7 @@ function bindEvents() {
   // Video form sync
   bindInput("v-prompt",   v=>state.videoForm.prompt=v);
   bindInput("v-neg",      v=>state.videoForm.negative_prompt=v);
-  bindInput("v-model",    v=>state.videoForm.model_name=v);
+  bindInput("v-model",    v=>{ applyVideoModelDefaults(v, { force: true }); render(); });
   bindInput("v-resolution",v=>state.videoForm.resolution=v);
   bindInput("v-fps",      v=>state.videoForm.fps=Number(v));
   bindInput("v-steps",    v=>state.videoForm.num_inference_steps=v);

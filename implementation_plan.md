@@ -26,9 +26,38 @@
 
 ---
 
-## NEXT SESSION — Priority 1
+## IMPLEMENTED THIS SESSION
 
-### 🔲 Phase 3 — xDiT 4-GPU Sequence Parallelism for WAN 14B
+### ✅ Phase 3 — WAN 14B quality-oriented xDiT foundation
+**Goal implemented**: make WAN 14B quality the priority on 4×80GB hosts by preferring BF16 xDiT, while keeping API compatibility and deploy readiness.
+
+What changed in code:
+- Added shared video model defaults in `flux-server/app/video_defaults.py`
+- WAN T2V 14B defaults now resolve to `720p`, `49` frames, `32` steps, `6.0` guidance, `49/12` chunking
+- `/models` now surfaces truthful video defaults and preferred backend metadata for the frontend
+- `VideoGenerateRequest` now fills model-specific defaults dynamically instead of baking generic WAN values into the schema
+- `main.py` now applies video defaults centrally before dispatch, removing the old `5.0/30/480p` handler drift
+- Added a deploy-ready WAN 14B xDiT helper: `flux-server/tools/wan14b_xdit_infer.py`
+- Added WAN 14B xDiT subprocess backend selection in `flux-server/app/pipelines/video_pipeline.py`
+- Updated compose and gunicorn config for 4-GPU worker groups (`GPUS_PER_JOB=4`, `count: all`, `shm_size: 16g`)
+- `requirements.txt` now installs xDiT from GitHub source because PyPI `xfuser==0.4.5` does not include the needed WAN pipeline support
+
+Design note:
+- The API server does **not** try to become a distributed xDiT rank process itself.
+- Instead, a gunicorn worker owns a fixed GPU slice and launches `torchrun` for WAN 14B xDiT jobs on that slice.
+- This keeps `/api/video/generate` unchanged and makes the backend deploy-ready without requiring the whole FastAPI process tree to run under `torchrun`.
+
+### Remaining validation before live deploy
+- Build the Docker image with the new source-installed `xfuser`
+- Run the standalone smoke test on the Vultr host and verify 4-GPU utilization
+- Run one WAN 14B API job and confirm it selects `xdit-bf16`
+- Run two concurrent WAN 14B jobs and confirm workers split across `0-3` and `4-7`
+
+---
+
+## ORIGINAL TARGETS
+
+### Phase 3 — xDiT 4-GPU Sequence Parallelism for WAN 14B
 **Goal**: 23 min → ~7 min per 15s video at full BF16 quality. 2 concurrent jobs.
 
 **Why xDiT, not device_map="auto"**:

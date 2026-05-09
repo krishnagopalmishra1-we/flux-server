@@ -32,7 +32,7 @@ Treat `flux-server/` as the production codebase. Root-level `app/` and older roo
 | Key | Model ID | Notes |
 |---|---|---|
 | `wan-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | Default video model and safest public default. |
-| `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | NF4 dual-transformer path, stricter A100 limits. |
+| `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | Prefers BF16 xDiT on 4×80GB hosts, falls back to NF4 diffusers elsewhere. |
 | `wan-i2v-14b` | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | NF4 image-to-video path. |
 | `hunyuan-video` | `hunyuanvideo-community/HunyuanVideo` | NF4 transformer, CPU-offloaded text encoder. |
 
@@ -98,6 +98,12 @@ Recent bug fixes:
 - Removed visible mojibake from user-facing strings
 - Queue navigation now changes the URL instead of only switching internal state
 
+Video default behavior now comes from backend model metadata:
+
+- `wan-t2v-1.3b`: `480p`, `33` frames, `30` steps, `5.0` guidance
+- `wan-t2v-14b`: `720p`, `49` frames, `32` steps, `6.0` guidance, `49/12` chunking
+- `hunyuan-video`: `720p`, `129` frames, `50` steps, `6.0` guidance
+
 ## Library / Output Store
 
 `app/output_store.py` now persists generated images to disk:
@@ -128,11 +134,18 @@ Recent bug fixes:
 ### Video
 
 - Default model: `wan-t2v-1.3b`
-- Default resolution: `480p`
-- Default frames: `33`
-- Default steps: `30`
+- WAN 1.3B public-safe default: `480p`, `33` frames, `30` steps
+- WAN 14B quality default: `720p`, `49` frames, `32` steps, `12` overlap
 
 These defaults are there to stay inside one A100 40GB plus limited disk, not because they are the theoretical best quality.
+
+## WAN 14B xDiT
+
+- Install `xfuser` from GitHub source, not PyPI `0.4.5`
+- The API path keeps `/api/video/generate` unchanged
+- Gunicorn workers own fixed GPU groups via `CUDA_VISIBLE_DEVICES`
+- WAN 14B xDiT jobs run through `torchrun` subprocesses launched by `app/pipelines/video_pipeline.py`
+- Standalone validation tool: `tools/wan14b_xdit_infer.py`
 
 ## Deployment Context
 

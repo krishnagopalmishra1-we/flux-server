@@ -3,27 +3,14 @@ import subprocess
 
 bind = "0.0.0.0:8080"
 worker_class = "uvicorn.workers.UvicornWorker"
-timeout = 3600        # 60 min: covers first-time model downloads (WAN 14B ~118GB)
+timeout = 3600
 keepalive = 5
-accesslog = "-"       # Log to stdout (captured by Docker / Cloud Logging)
+accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 
-# preload_app MUST stay disabled: CUDA cannot be re-initialized after fork.
-# Each worker initialises its own CUDA context after receiving a GPU assignment
-# in post_fork. Enabling preload_app would share a single CUDA context across all
-# workers and crash on the second fork.
-
-# max_requests / max_requests_jitter are disabled: recycling a worker mid-job
-# would terminate long-running video generation (30+ min). Memory fragmentation
-# is acceptable given that each worker holds one model in VRAM indefinitely.
-
 
 def _detect_gpu_count() -> int:
-    """Return the number of CUDA GPUs visible to the container.
-
-    Priority: GPU_COUNT env var → nvidia-smi → 1 (safe fallback).
-    """
     env_override = os.environ.get("GPU_COUNT", "").strip()
     if env_override.isdigit() and int(env_override) > 0:
         return int(env_override)
@@ -38,30 +25,35 @@ def _detect_gpu_count() -> int:
 
 
 _num_gpus = _detect_gpu_count()
+_gpus_per_job = max(1, int(os.environ.get("GPUS_PER_JOB", "4")))
+_group_count = max(1, _num_gpus // _gpus_per_job)
 
-# One worker per GPU for maximum parallel job throughput.
-# Override via NUM_WORKERS env var if you want fewer (e.g. 4 for BF16 dual-GPU jobs).
-workers = int(os.environ.get("NUM_WORKERS", str(_num_gpus)))
+# Allow an explicit override, otherwise default to one worker per GPU group.
+workers = int(os.environ.get("NUM_WORKERS", str(_group_count)))
+
+
+def _gpu_slice_for_worker(worker_age: int) -> list[int]:
+    if _num_gpus <= _gpus_per_job:
+        return list(range(_num_gpus))
+    group_index = worker_age % _group_count
+    start = group_index * _gpus_per_job
+    return list(range(start, min(start + _gpus_per_job, _num_gpus)))
 
 
 def post_fork(server, worker):
-    """Assign each gunicorn worker an exclusive GPU.
-
-    worker.age is an incrementing counter (0, 1, 2, ...) assigned by the Arbiter
-    at fork time. Modulo _num_gpus gives a stable round-robin GPU assignment.
-    If a worker is restarted, it may temporarily share a GPU — this is acceptable
-    since VRAM is large enough for two NF4 WAN 14B instances on 80 GB.
-    """
-    gpu_idx = worker.age % _num_gpus
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
-    # Force a clean CUDA context in this worker (no inherited state from master)
+    gpu_slice = _gpu_slice_for_worker(worker.age)
+    visible = ",".join(str(idx) for idx in gpu_slice) if gpu_slice else ""
+    os.environ["CUDA_VISIBLE_DEVICES"] = visible
+    os.environ["XDIT_GPU_GROUP_SIZE"] = str(len(gpu_slice) or 1)
+    os.environ["VIDEO_PARALLEL_BACKEND"] = os.environ.get("VIDEO_PARALLEL_BACKEND", "auto")
     try:
         import torch
+
         if torch.cuda.is_initialized():
             torch.cuda.empty_cache()
     except Exception:
         pass
     print(
-        f"[gunicorn] worker {worker.age} (pid={os.getpid()}) → GPU {gpu_idx}",
+        f"[gunicorn] worker {worker.age} (pid={os.getpid()}) -> GPUs [{visible or 'cpu'}]",
         flush=True,
     )

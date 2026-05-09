@@ -17,17 +17,19 @@ services:
       - ./video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - VIDEO_PARALLEL_BACKEND=auto
+      - GPUS_PER_JOB=4
       # Set HF_OFFLINE=true in .env after first successful model download
       # to eliminate HF network metadata round-trips on every load.
     env_file:
       - .env
-    shm_size: '2g'
+    shm_size: '16g'
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     restart: unless-stopped
 

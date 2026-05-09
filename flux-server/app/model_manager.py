@@ -28,6 +28,7 @@ from diffusers import (
 )
 from transformers import BitsAndBytesConfig as HFBitsAndBytesConfig
 from app.config import get_settings
+from app.video_defaults import get_video_model_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,13 @@ class ModelConfig:
         pipeline_module: str | None = None,
         # Extra kwargs passed during model loading
         extra_load_kwargs: dict | None = None,
+        # Video request defaults surfaced to the frontend
+        default_resolution: str | None = None,
+        default_num_frames: int | None = None,
+        default_fps: int | None = None,
+        default_chunk_size: int | None = None,
+        default_chunk_overlap: int | None = None,
+        preferred_backend: str | None = None,
     ):
         self.model_id = model_id
         self.pipeline_class = pipeline_class
@@ -98,6 +106,12 @@ class ModelConfig:
         self.default_guidance_scale = default_guidance_scale
         self.pipeline_module = pipeline_module
         self.extra_load_kwargs = extra_load_kwargs or {}
+        self.default_resolution = default_resolution
+        self.default_num_frames = default_num_frames
+        self.default_fps = default_fps
+        self.default_chunk_size = default_chunk_size
+        self.default_chunk_overlap = default_chunk_overlap
+        self.preferred_backend = preferred_backend
 
 
 class MultiModelManager:
@@ -189,8 +203,14 @@ class MultiModelManager:
             description="Wan 2.1 T2V 1.3B: fast text-to-video, lightweight model (Wan 2.1)",
             min_steps=20,
             max_steps=50,
-            default_steps=30,
-            default_guidance_scale=5.0,
+            default_steps=get_video_model_defaults("wan-t2v-1.3b")["default_steps"],
+            default_guidance_scale=get_video_model_defaults("wan-t2v-1.3b")["default_guidance_scale"],
+            default_resolution=get_video_model_defaults("wan-t2v-1.3b")["default_resolution"],
+            default_num_frames=get_video_model_defaults("wan-t2v-1.3b")["default_num_frames"],
+            default_fps=get_video_model_defaults("wan-t2v-1.3b")["default_fps"],
+            default_chunk_size=get_video_model_defaults("wan-t2v-1.3b")["default_chunk_size"],
+            default_chunk_overlap=get_video_model_defaults("wan-t2v-1.3b")["default_chunk_overlap"],
+            preferred_backend=get_video_model_defaults("wan-t2v-1.3b")["preferred_backend"],
         ),
         "wan-t2v-14b": ModelConfig(
             model_id="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
@@ -203,11 +223,17 @@ class MultiModelManager:
             # Dual-transformer NF4: ~7 GB each + UMT5 text encoder ~10.5 GB + VAE ~1 GB = ~25.5 GB
             # Peak during load (one shard in BF16 at a time): ~30 GB. Need 30 GB free to start.
             vram_free_gb=30.0,
-            description="Wan 2.2 T2V 14B: SOTA cinematic video, maximum quality (NF4, ~25.5 GB)",
+            description="Wan 2.2 T2V 14B: high-fidelity cinematic video, prefers BF16 xDiT on 4x80GB and falls back to NF4",
             min_steps=20,
-            max_steps=50,
-            default_steps=30,
-            default_guidance_scale=5.0,
+            max_steps=60,
+            default_steps=get_video_model_defaults("wan-t2v-14b")["default_steps"],
+            default_guidance_scale=get_video_model_defaults("wan-t2v-14b")["default_guidance_scale"],
+            default_resolution=get_video_model_defaults("wan-t2v-14b")["default_resolution"],
+            default_num_frames=get_video_model_defaults("wan-t2v-14b")["default_num_frames"],
+            default_fps=get_video_model_defaults("wan-t2v-14b")["default_fps"],
+            default_chunk_size=get_video_model_defaults("wan-t2v-14b")["default_chunk_size"],
+            default_chunk_overlap=get_video_model_defaults("wan-t2v-14b")["default_chunk_overlap"],
+            preferred_backend=get_video_model_defaults("wan-t2v-14b")["preferred_backend"],
         ),
         "wan-i2v-14b": ModelConfig(
             model_id="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
@@ -221,9 +247,15 @@ class MultiModelManager:
             vram_free_gb=30.0,
             description="Wan 2.2 I2V 14B: image-to-video animation, NF4, ~25.5 GB VRAM",
             min_steps=20,
-            max_steps=50,
-            default_steps=30,
-            default_guidance_scale=5.0,
+            max_steps=60,
+            default_steps=get_video_model_defaults("wan-i2v-14b")["default_steps"],
+            default_guidance_scale=get_video_model_defaults("wan-i2v-14b")["default_guidance_scale"],
+            default_resolution=get_video_model_defaults("wan-i2v-14b")["default_resolution"],
+            default_num_frames=get_video_model_defaults("wan-i2v-14b")["default_num_frames"],
+            default_fps=get_video_model_defaults("wan-i2v-14b")["default_fps"],
+            default_chunk_size=get_video_model_defaults("wan-i2v-14b")["default_chunk_size"],
+            default_chunk_overlap=get_video_model_defaults("wan-i2v-14b")["default_chunk_overlap"],
+            preferred_backend=get_video_model_defaults("wan-i2v-14b")["preferred_backend"],
         ),
 
         "hunyuan-video": ModelConfig(
@@ -241,8 +273,14 @@ class MultiModelManager:
             description="HunyuanVideo: 720p text-to-video, NF4 transformer, ~9 GB VRAM (CPU-offload text encoder)",
             min_steps=20,
             max_steps=100,
-            default_steps=50,
-            default_guidance_scale=6.0,
+            default_steps=get_video_model_defaults("hunyuan-video")["default_steps"],
+            default_guidance_scale=get_video_model_defaults("hunyuan-video")["default_guidance_scale"],
+            default_resolution=get_video_model_defaults("hunyuan-video")["default_resolution"],
+            default_num_frames=get_video_model_defaults("hunyuan-video")["default_num_frames"],
+            default_fps=get_video_model_defaults("hunyuan-video")["default_fps"],
+            default_chunk_size=get_video_model_defaults("hunyuan-video")["default_chunk_size"],
+            default_chunk_overlap=get_video_model_defaults("hunyuan-video")["default_chunk_overlap"],
+            preferred_backend=get_video_model_defaults("hunyuan-video")["preferred_backend"],
         ),
 
     }
@@ -597,5 +635,11 @@ class MultiModelManager:
             "max_steps": config.max_steps,
             "default_steps": config.default_steps,
             "default_guidance_scale": config.default_guidance_scale,
+            "default_resolution": config.default_resolution,
+            "default_num_frames": config.default_num_frames,
+            "default_fps": config.default_fps,
+            "default_chunk_size": config.default_chunk_size,
+            "default_chunk_overlap": config.default_chunk_overlap,
+            "preferred_backend": config.preferred_backend,
             "loaded": model_name in self.pipelines,
         }

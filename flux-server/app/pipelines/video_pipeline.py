@@ -21,8 +21,13 @@ from __future__ import annotations
 import gc
 import io
 import time
+import json
+import os
 import base64
 import logging
+import shutil
+import subprocess
+import sys
 import tempfile
 import importlib
 from pathlib import Path
@@ -33,6 +38,7 @@ from PIL import Image
 
 from app.config import get_settings
 from app.output_store import output_store
+from app.video_defaults import apply_video_defaults, get_video_model_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,7 @@ class VideoPipeline:
         self._current_model: Optional[str] = None
         self._compiled = False
         self._loaded_lora: Optional[str] = None
+        self._active_backend: Optional[str] = None
 
     # ──────────────────────────────────────────────
     #  Helpers
@@ -166,6 +173,180 @@ class VideoPipeline:
             bnb_4bit_use_double_quant=True,
         )
 
+    def _visible_gpu_count(self) -> int:
+        if not torch.cuda.is_available():
+            return 0
+        try:
+            return torch.cuda.device_count()
+        except Exception:
+            return 0
+
+    def _resolve_backend_mode(self) -> str:
+        mode = (get_settings().video_parallel_backend or "auto").strip().lower()
+        if mode not in {"auto", "xdit", "disabled"}:
+            return "auto"
+        return mode
+
+    def _can_use_xdit_backend(self, model_name: str) -> tuple[bool, str]:
+        if model_name != "wan-t2v-14b":
+            return False, "xDiT is only configured for WAN T2V 14B"
+
+        mode = self._resolve_backend_mode()
+        if mode == "disabled":
+            return False, "VIDEO_PARALLEL_BACKEND=disabled"
+
+        defaults = get_video_model_defaults(model_name)
+        visible_gpus = self._visible_gpu_count()
+        required_gpus = int(get_settings().gpus_per_job or defaults.get("xdit_min_gpu_count", 4))
+        if visible_gpus < required_gpus:
+            return False, f"only {visible_gpus} visible GPU(s); need {required_gpus}"
+
+        total_gb = self._gpu_total_gb()
+        min_vram_gb = float(defaults.get("xdit_min_vram_gb", 70.0))
+        if total_gb < min_vram_gb:
+            return False, f"visible GPU VRAM {total_gb:.1f}GB below {min_vram_gb:.1f}GB threshold"
+
+        if shutil.which("torchrun") is None:
+            return False, "torchrun is not available in PATH"
+
+        return True, "xDiT BF16 backend available"
+
+    def _log_backend_choice(self, model_name: str, backend: str, detail: str) -> None:
+        logger.info("Video backend for %s: %s (%s)", model_name, backend, detail)
+
+    def _xdit_script_path(self) -> Path:
+        script_path = Path(__file__).resolve().parents[2] / "tools" / "wan14b_xdit_infer.py"
+        if not script_path.exists():
+            raise FileNotFoundError(f"xDiT runner script not found: {script_path}")
+        return script_path
+
+    def _run_xdit_subprocess(
+        self,
+        *,
+        prompt: str,
+        negative_prompt: str,
+        resolution: str,
+        total_frames: int,
+        fps: int,
+        guidance_scale: float,
+        num_inference_steps: int,
+        seed: Optional[int],
+        chunk_size: int,
+        chunk_overlap: int,
+        progress_callback: Optional[Callable[[float], None]],
+        job_id: Optional[str],
+    ) -> Dict[str, Any]:
+        script_path = self._xdit_script_path()
+        tmp_dir = Path(tempfile.mkdtemp(prefix="wan14b_xdit_"))
+        output_path = tmp_dir / "wan14b_xdit.mp4"
+        result_path = tmp_dir / "wan14b_xdit.json"
+        stderr_path = tmp_dir / "wan14b_xdit.stderr.log"
+
+        cmd = [
+            "torchrun",
+            f"--nproc_per_node={min(self._visible_gpu_count(), int(get_settings().gpus_per_job or 4))}",
+            "--master_addr=127.0.0.1",
+            "--master_port=29500",
+            str(script_path),
+            "--prompt", prompt,
+            "--negative-prompt", negative_prompt or "",
+            "--resolution", resolution,
+            "--total-frames", str(total_frames),
+            "--fps", str(fps),
+            "--guidance-scale", str(guidance_scale),
+            "--num-inference-steps", str(num_inference_steps),
+            "--chunk-size", str(chunk_size),
+            "--chunk-overlap", str(chunk_overlap),
+            "--output", str(output_path),
+            "--result-json", str(result_path),
+        ]
+        if seed is not None:
+            cmd.extend(["--seed", str(seed)])
+
+        env = os.environ.copy()
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        repo_root = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = repo_root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+
+        logger.info("Launching WAN 14B xDiT subprocess: %s", " ".join(cmd))
+        if progress_callback:
+            progress_callback(5.0)
+
+        start_time = time.perf_counter()
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            cwd=repo_root,
+        )
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        progress_pct = 10.0
+        try:
+            while process.poll() is None:
+                if process.stdout is not None:
+                    line = process.stdout.readline()
+                    if line:
+                        stdout_lines.append(line.rstrip())
+                        logger.info("[xdit] %s", line.rstrip())
+                if process.stderr is not None:
+                    err_line = process.stderr.readline()
+                    if err_line:
+                        stderr_lines.append(err_line.rstrip())
+                        logger.warning("[xdit] %s", err_line.rstrip())
+                if progress_callback:
+                    progress_pct = min(progress_pct + 1.5, 88.0)
+                    progress_callback(progress_pct)
+                time.sleep(5.0)
+
+            stdout_tail, stderr_tail = process.communicate(timeout=30)
+            if stdout_tail:
+                stdout_lines.extend(line for line in stdout_tail.splitlines() if line.strip())
+            if stderr_tail:
+                stderr_lines.extend(line for line in stderr_tail.splitlines() if line.strip())
+
+            if process.returncode != 0:
+                stderr_path.write_text("\n".join(stderr_lines[-200:]), encoding="utf-8")
+                raise RuntimeError(
+                    f"xDiT subprocess failed with exit code {process.returncode}. "
+                    f"See {stderr_path} for stderr tail."
+                )
+
+            if not result_path.exists() or not output_path.exists():
+                raise RuntimeError("xDiT subprocess completed without producing expected output artifacts.")
+
+            result_data = json.loads(result_path.read_text(encoding="utf-8"))
+            video_path = output_store.save_file_from_path(str(output_path), "video", job_id)
+            import imageio.v3 as iio
+            first_frame = None
+            try:
+                first_frame = iio.imread(str(output_path), index=0)
+            except Exception:
+                first_frame = None
+
+            thumbnail_b64 = self._frame_to_b64(first_frame)
+            if progress_callback:
+                progress_callback(100.0)
+
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            return {
+                "video_url": output_store.get_url(video_path),
+                "thumbnail_b64": thumbnail_b64,
+                "duration_seconds": round(float(result_data.get("duration_seconds", total_frames / max(fps, 1))), 2),
+                "inference_time_ms": round(float(result_data.get("inference_time_ms", elapsed_ms)), 0),
+                "seed_used": int(result_data.get("seed_used", seed if seed is not None else 0)),
+                "num_frames": int(result_data.get("num_frames", total_frames)),
+                "chunks_generated": int(result_data.get("chunks_generated", 1)),
+                "backend": "xdit-bf16",
+            }
+        finally:
+            if process.poll() is None:
+                process.kill()
+
     # ──────────────────────────────────────────────
     #  Model Loading
     # ──────────────────────────────────────────────
@@ -221,6 +402,11 @@ class VideoPipeline:
                 else:
                     raise ValueError(f"Unknown video model: {model_name}")
                 self._current_model = model_name
+                self._active_backend = "diffusers-bf16" if not _wan14b_nf4 or model_name == "wan-t2v-1.3b" else "diffusers-nf4"
+                if model_name == "wan-i2v-14b":
+                    self._active_backend = "diffusers-nf4" if _wan14b_nf4 else "diffusers-bf16"
+                if model_name == "hunyuan-video":
+                    self._active_backend = "diffusers-nf4"
                 gpu = self._gpu_mb()
                 logger.info(f"✅ {model_name} loaded | VRAM used: {gpu:.0f} MB")
             except Exception as e:
@@ -469,6 +655,7 @@ class VideoPipeline:
         self._pipe = None
         self._current_model = None
         self._compiled = False
+        self._active_backend = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -509,6 +696,47 @@ class VideoPipeline:
           240fr → 6 chunks × ~2 min each ≈ ~12 min warm inference
           (vs old 81fr/720p/16-overlap config → 4 chunks × ~20min = 80 min)
         """
+        params = apply_video_defaults(
+            model_name,
+            {
+                "resolution": resolution,
+                "num_frames": total_frames,
+                "fps": fps,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+            },
+        )
+        resolution = params["resolution"]
+        fps = params["fps"]
+        guidance_scale = params["guidance_scale"]
+        num_inference_steps = params["num_inference_steps"]
+        chunk_size = params["chunk_size"]
+        chunk_overlap = params["chunk_overlap"]
+
+        can_use_xdit, xdit_detail = self._can_use_xdit_backend(model_name)
+        if can_use_xdit and lora_name:
+            can_use_xdit = False
+            xdit_detail = "video LoRA requested; using diffusers path"
+        if can_use_xdit:
+            self._log_backend_choice(model_name, "xdit-bf16", xdit_detail)
+            return self._run_xdit_subprocess(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                resolution=resolution,
+                total_frames=total_frames,
+                fps=fps,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                progress_callback=progress_callback,
+                job_id=job_id,
+            )
+
+        self._log_backend_choice(model_name, "diffusers", xdit_detail)
         if progress_callback:
             progress_callback(1.0)
         self.load_model(model_name, progress_callback)
@@ -658,6 +886,44 @@ class VideoPipeline:
         progress_callback: Optional[Callable[[float], None]] = None,
         job=None,
     ) -> Dict[str, Any]:
+        params = apply_video_defaults(
+            model_name,
+            {
+                "resolution": resolution,
+                "num_frames": num_frames,
+                "fps": fps,
+                "guidance_scale": guidance_scale,
+                "num_inference_steps": num_inference_steps,
+            },
+        )
+        resolution = params["resolution"]
+        num_frames = params["num_frames"]
+        fps = params["fps"]
+        guidance_scale = params["guidance_scale"]
+        num_inference_steps = params["num_inference_steps"]
+
+        can_use_xdit, xdit_detail = self._can_use_xdit_backend(model_name)
+        if can_use_xdit and lora_name:
+            can_use_xdit = False
+            xdit_detail = "video LoRA requested; using diffusers path"
+        if can_use_xdit:
+            self._log_backend_choice(model_name, "xdit-bf16", xdit_detail)
+            return self._run_xdit_subprocess(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                resolution=resolution,
+                total_frames=num_frames,
+                fps=fps,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                chunk_size=params["chunk_size"],
+                chunk_overlap=params["chunk_overlap"],
+                progress_callback=progress_callback,
+                job_id=job_id,
+            )
+
+        self._log_backend_choice(model_name, "diffusers", xdit_detail)
         # Emit 1% immediately so the UI shows activity even during model load/download
         if progress_callback:
             progress_callback(1.0)

@@ -24,6 +24,7 @@ from app.runtime import gpu_runtime
 from app.pipeline import get_lora_dir
 from app.pipelines.video_pipeline import video_pipeline
 from app.pipelines.video_pipeline import get_video_lora_dir
+from app.video_defaults import apply_video_defaults
 
 from app.config import get_settings
 
@@ -93,7 +94,7 @@ def _handle_video_job(job) -> dict:
     Called by job_queue._run_handler_in_thread inside asyncio.to_thread, so it
     is already off the main event loop — no nested event loop needed.
     """
-    payload = job.payload
+    payload = apply_video_defaults(job.model_name, job.payload)
 
     # Unload image model before loading video model. The shared GPU lock prevents
     # image generation from unloading this video model mid-inference.
@@ -110,10 +111,10 @@ def _handle_video_job(job) -> dict:
             source_image_b64=payload["source_image_b64"],
             prompt=payload.get("prompt", ""),
             model_name=job.model_name,
-            num_frames=payload.get("num_frames", 33),
-            fps=payload.get("fps", 16),
-            guidance_scale=payload.get("guidance_scale", 5.0),
-            num_inference_steps=payload.get("num_inference_steps", 30),
+            num_frames=payload["num_frames"],
+            fps=payload["fps"],
+            guidance_scale=payload["guidance_scale"],
+            num_inference_steps=payload["num_inference_steps"],
             seed=payload.get("seed"),
             lora_name=payload.get("lora_name"),
             lora_scale=payload.get("lora_scale", 1.0),
@@ -124,19 +125,19 @@ def _handle_video_job(job) -> dict:
     elif job.model_name == "hunyuan-video":
         return video_pipeline.generate_hunyuan_video(
             prompt=payload["prompt"],
-            resolution=payload.get("resolution", "720p"),
-            num_frames=payload.get("num_frames", 129),
-            fps=payload.get("fps", 24),
-            guidance_scale=payload.get("guidance_scale", 6.0),
-            num_inference_steps=payload.get("num_inference_steps", 50),
+            resolution=payload["resolution"],
+            num_frames=payload["num_frames"],
+            fps=payload["fps"],
+            guidance_scale=payload["guidance_scale"],
+            num_inference_steps=payload["num_inference_steps"],
             seed=payload.get("seed"),
             job_id=job.id,
             progress_callback=_progress,
             job=job,
         )
     else:
-        num_frames = payload.get("num_frames", 33)
-        chunk_size = payload.get("chunk_size", 49)
+        num_frames = payload["num_frames"]
+        chunk_size = payload["chunk_size"]
 
         # Auto-detect: use chunked generation for long videos
         if num_frames > chunk_size:
@@ -144,13 +145,13 @@ def _handle_video_job(job) -> dict:
                 prompt=payload["prompt"],
                 model_name=job.model_name,
                 negative_prompt=payload.get("negative_prompt", ""),
-                resolution=payload.get("resolution", "480p"),
+                resolution=payload["resolution"],
                 total_frames=num_frames,
                 chunk_size=chunk_size,
-                chunk_overlap=payload.get("chunk_overlap", 8),
-                fps=payload.get("fps", 16),
-                guidance_scale=payload.get("guidance_scale", 5.0),
-                num_inference_steps=payload.get("num_inference_steps", 30),
+                chunk_overlap=payload["chunk_overlap"],
+                fps=payload["fps"],
+                guidance_scale=payload["guidance_scale"],
+                num_inference_steps=payload["num_inference_steps"],
                 seed=payload.get("seed"),
                 lora_name=payload.get("lora_name"),
                 lora_scale=payload.get("lora_scale", 1.0),
@@ -163,11 +164,11 @@ def _handle_video_job(job) -> dict:
                 prompt=payload["prompt"],
                 model_name=job.model_name,
                 negative_prompt=payload.get("negative_prompt", ""),
-                resolution=payload.get("resolution", "480p"),
+                resolution=payload["resolution"],
                 num_frames=num_frames,
-                fps=payload.get("fps", 16),
-                guidance_scale=payload.get("guidance_scale", 5.0),
-                num_inference_steps=payload.get("num_inference_steps", 30),
+                fps=payload["fps"],
+                guidance_scale=payload["guidance_scale"],
+                num_inference_steps=payload["num_inference_steps"],
                 seed=payload.get("seed"),
                 lora_name=payload.get("lora_name"),
                 lora_scale=payload.get("lora_scale", 1.0),
