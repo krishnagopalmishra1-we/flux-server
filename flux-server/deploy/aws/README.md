@@ -1,26 +1,35 @@
 # Hyperforge AI — AWS Deployment
 
-Target: single p4d.24xlarge spot instance (1 of its 8 × A100 40 GB GPUs).
+Target: single g5.2xlarge On-Demand instance (1 × NVIDIA A10G 24 GB GPU).
 Persistent model storage on a 1 TB EBS gp3 volume (500 MB/s, models survive stops).
 
 ## Prerequisites
 
 1. AWS CLI installed and configured (`aws configure`).
 2. An EC2 key pair created in your target region.
-   ```bash
-   aws ec2 create-key-pair --key-name hyperforge --query 'KeyMaterial' \
-     --output text --region us-east-1 > ~/.ssh/hyperforge.pem
-   chmod 400 ~/.ssh/hyperforge.pem
-   ```
-3. p4d quota approved for your region (us-east-1 has best availability).
-   Check: AWS Console → Service Quotas → EC2 → "Running On-Demand P instances".
+   - On Windows, `launch.ps1` will automatically create the key pair and save it to `~/.ssh/hyperforge.pem` if it doesn't exist.
+   - On Linux/macOS:
+     ```bash
+     aws ec2 create-key-pair --key-name hyperforge --query 'KeyMaterial' \
+       --output text --region us-east-1 > ~/.ssh/hyperforge.pem
+     chmod 400 ~/.ssh/hyperforge.pem
+     ```
+3. G instance quota approved for your region (e.g., Running On-Demand G and VT instances >= 8 vCPUs).
 
 ---
 
 ## Step-by-step
 
-### 1. Launch the instance (run from your laptop)
+### 1. Launch the instance (run from your local machine)
 
+**On Windows (PowerShell):**
+```powershell
+cd flux-server/deploy/aws
+$env:KEY_NAME="hyperforge"
+.\launch.ps1
+```
+
+**On Linux/macOS (Bash):**
 ```bash
 cd flux-server/deploy/aws
 KEY_NAME=hyperforge ./launch.sh
@@ -29,13 +38,13 @@ KEY_NAME=hyperforge ./launch.sh
 This will:
 - Find the latest Deep Learning AMI (Ubuntu 22.04, CUDA pre-installed)
 - Create a `hyperforge-sg` security group (ports 22 + 8080)
-- Launch a p4d.24xlarge **spot** instance (persistent, stops on interruption)
+- Launch a g5.2xlarge **On-Demand** instance
 - Attach a 200 GB root EBS + 1 TB data EBS (models persist across stops)
 - Run `bootstrap.sh` as user-data in the background
 
 Optional overrides:
 ```bash
-REGION=us-west-2 INSTANCE_TYPE=p4d.24xlarge KEY_NAME=my-key ./launch.sh
+REGION=us-west-2 INSTANCE_TYPE=g5.2xlarge KEY_NAME=my-key ./launch.sh
 ```
 
 ### 2. Wait for bootstrap (~5-10 min), then SSH in
@@ -142,16 +151,16 @@ is explicitly deleted (it has `DeleteOnTermination=false`).
 
 ---
 
-## Cost estimates (us-east-1, spot)
+## Cost estimates (us-east-1)
 
 | Component | Rate | Notes |
 |---|---|---|
-| p4d.24xlarge spot | ~$9–12/hr | Varies; on-demand is ~$32/hr |
+| g5.2xlarge On-Demand | ~$1.21/hr | Spot is ~$0.40/hr (requires Spot quota) |
 | EBS gp3 1 TB | ~$0.12/GB/mo | ~$120/mo just for storage |
-| Data transfer | $0.09/GB | Outbound video downloads |
+| Data transfer | $0.09/GB | Outbound downloads |
 
 **Stop the instance when not in use** — EBS charges continue even when stopped,
-but they are negligible (~$4/day for 1 TB) vs. the GPU cost (~$9/hr).
+but they are negligible (~$4/day for 1 TB) vs. the GPU cost (~$1.21/hr).
 
 ### Cheaper alternatives for testing / image-only workloads
 
@@ -191,7 +200,7 @@ df -h /mnt/model-disk
 sudo find /mnt/model-disk/outputs -name '*.mp4' -mtime +1 -delete
 ```
 
-**p4d spot capacity not available:**
+**Instance capacity not available:**
 Try a different AZ by setting `SUBNET_ID` to a subnet in another availability zone:
 ```bash
 aws ec2 describe-subnets --filters 'Name=default-for-az,Values=true' \

@@ -1,7 +1,6 @@
 # AWS deployment compose file.
 # bootstrap.sh copies this to flux-server/docker-compose.yml on the EC2 instance.
 # All models live on the persistent EBS data disk mounted at /mnt/model-disk.
-# Configure this host for grouped 4-GPU WAN 14B xDiT jobs.
 
 services:
   redis:
@@ -22,7 +21,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # EBS gp3 data disk (500 MB/s) replaces the GCP HDD — all model families live here
+      # EBS gp3 data disk (500 MB/s) — all model families live here
       - /mnt/model-disk/hf-cache:/mnt/hf-cache
       - /mnt/model-disk/model-cache-ssd:/app/model_cache
       - /mnt/model-disk/outputs:/mnt/outputs
@@ -31,9 +30,9 @@ services:
       - ./video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-      # Use GPU 0 only — p4d.24xlarge has 8 A100s, we want exactly one
+      # Single-GPU deployment for g5.2xlarge (1 × A10G)
       - VIDEO_PARALLEL_BACKEND=auto
-      - GPUS_PER_JOB=4
+      - GPUS_PER_JOB=1
       - JOB_BACKEND=redis
       - REDIS_URL=redis://redis:6379/0
     env_file:
