@@ -28,16 +28,8 @@ if (-not (Test-Path $colab_cmd)) {
 
 Write-Host "[OK] Colab CLI is ready." -ForegroundColor Green
 
-# 2. Authenticate
-Write-Host ""
-Write-Host "Step 1: Checking Authentication..." -ForegroundColor Yellow
-Write-Host "If a browser window opens, please log into the Google Account associated with your Colab Pro."
-try {
-    & $colab_cmd auth
-} catch {
-    Write-Host "Authentication failed or was cancelled." -ForegroundColor Red
-    exit 1
-}
+# Authentication is handled automatically by colab new if the token is missing or expired,
+# and it uses the cached ~/.colab-cli-oauth-config.json otherwise.
 
 # 3. Provision GPU
 Write-Host ""
