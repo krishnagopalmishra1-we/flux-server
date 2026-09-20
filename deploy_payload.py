@@ -14,8 +14,8 @@ subprocess.run("git clone https://github.com/krishnagopalmishra1-we/flux-server.
 os.chdir("/content/hyperforge/flux-server")
 
 print("[2/4] Installing dependencies (this takes a minute)...")
-subprocess.run("pip install -r requirements.txt", shell=True)
-subprocess.run("pip install fastapi uvicorn", shell=True)
+subprocess.run("pip install -r requirements.txt", shell=True, check=True)
+subprocess.run("pip install fastapi uvicorn pydantic-settings python-multipart", shell=True, check=True)
 
 print("[3/4] Establishing secure tunnel...")
 subprocess.run("wget -q -c -nc https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", shell=True)
