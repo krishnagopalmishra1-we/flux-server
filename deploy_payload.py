@@ -25,8 +25,15 @@ print("[2/4] Installing dependencies (this takes a minute)...")
 t = threading.Thread(target=keep_alive)
 t.start()
 try:
-    subprocess.run("pip install -r requirements.txt", shell=True, check=True)
-    subprocess.run("pip install fastapi uvicorn pydantic-settings python-multipart", shell=True, check=True)
+    try:
+        subprocess.run("pip install -r requirements.txt > pip_log.txt 2>&1", shell=True, check=True)
+    except subprocess.CalledProcessError:
+        with open("pip_log.txt", "r") as f:
+            print("================ PIP ERROR LOG ================")
+            print(f.read()[-5000:])
+            print("===============================================")
+        raise
+    subprocess.run("pip install fastapi uvicorn pydantic-settings python-multipart > pip_log2.txt 2>&1", shell=True, check=True)
 finally:
     t.do_run = False
     t.join()
