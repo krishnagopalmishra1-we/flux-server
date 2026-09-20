@@ -17,6 +17,7 @@ Thumbs.db
 # Local model artifacts
 loras/
 video_loras/
+outputs/
 
 # Python cache and tooling
 .mypy_cache/
