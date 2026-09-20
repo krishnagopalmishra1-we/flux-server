@@ -3,9 +3,7 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3-pip git \
     build-essential cmake pkg-config \
-    ffmpeg libavformat-dev libavcodec-dev libavdevice-dev \
-    libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
-    libgl1 libglib2.0-0 libsndfile1 libsm6 libxext6 && \
+    libgl1 libglib2.0-0 libsm6 libxext6 && \
     rm -rf /var/lib/apt/lists/* && \
     useradd -m -s /bin/bash appuser
 
@@ -26,8 +24,8 @@ COPY app/ ./app/
 COPY tools/ ./tools/
 COPY gunicorn.conf.py .
 
-RUN mkdir -p loras video_loras /mnt/outputs/video /app/model_cache && \
-    chown -R appuser:appuser loras video_loras /mnt/outputs /app/model_cache
+RUN mkdir -p loras /mnt/outputs/image /app/model_cache && \
+    chown -R appuser:appuser loras /mnt/outputs /app/model_cache
 
 USER appuser
 

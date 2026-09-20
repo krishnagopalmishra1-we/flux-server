@@ -7,17 +7,16 @@ class Settings(BaseSettings):
     model_id: str = "black-forest-labs/FLUX.1-dev"
 
     # Cache directories — split by disk tier for speed.
-    # High-priority models (FLUX, WAN 1.3B, HunyuanVideo) go on SSD (/app/model_cache).
-    # Low-priority models (WAN 14B, I2V 14B, LTX) fall back to HDD (/mnt/hf-cache).
-    # Set cache_dir_ssd=/mnt/hf-cache to disable split caching (single disk).
-    cache_dir: str = "/mnt/hf-cache"        # default / HDD fallback
+    # High-priority models (FLUX) go on SSD (/app/model_cache).
+    # Other models fall back to /mnt/hf-cache.
+    cache_dir: str = "/mnt/hf-cache"        # default / fallback
     cache_dir_ssd: str = "/app/model_cache" # SSD — fast-path for priority models
 
     hf_token: str = ""
-    sd3_hf_token: str = ""  # Separate token for SD3 gated models
+    sd3_hf_token: str = ""  # Separate token for SD3/SD3.5 gated models
 
     # Offline mode — set after first cache fill to skip HF network metadata checks.
-    # Eliminates ~2-30s of network overhead per model load.
+    # Eliminates network overhead per model load.
     hf_offline: bool = False
 
     # Server
@@ -27,7 +26,6 @@ class Settings(BaseSettings):
 
     # Security
     api_keys: str = ""  # Comma-separated valid API keys
-    admin_api_key: str = ""  # Separate key for admin endpoints (queue drain, etc.)
     rate_limit_per_minute: int = 10
 
     # CORS — restrict to your frontend domain in production.
@@ -49,29 +47,7 @@ class Settings(BaseSettings):
     # LoRA storage. Keep these on persistent mounted storage so uploaded
     # adapters survive container rebuilds and are visible to list/load paths.
     lora_dir: str = "/mnt/hf-cache/loras"
-    video_lora_dir: str = "/mnt/hf-cache/video_loras"
     max_lora_upload_mb: int = 1536
-
-    # Job queue
-    max_queue_size: int = 50
-    max_jobs_per_user: int = 5
-    job_backend: str = "memory"  # memory | redis
-    redis_url: str = "redis://redis:6379/0"
-    job_result_ttl_seconds: int = 86400
-    job_watchdog_timeout_seconds: int = 3600
-
-    # Feature flags
-    enable_video: bool = True
-
-    # Video defaults
-    wan_default_variant: str = "1.3b"   # "1.3b" or "14b"
-    default_video_fps: int = 16
-    default_video_frames: int = 33
-    video_parallel_backend: str = "auto"  # auto | xdit | disabled
-    gpus_per_job: int = 4
-    xdit_timeout_seconds: int = 14400
-    max_request_body_mb: int = 25
-    max_source_image_b64_length: int = 25 * 1024 * 1024
 
     class Config:
         env_file = ".env"

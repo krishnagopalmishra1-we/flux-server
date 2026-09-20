@@ -84,7 +84,7 @@ $injectedContent = "import os`nos.environ['HF_TOKEN'] = '$HF_TOKEN'`n" + $payloa
 Set-Content -Path $tempPayload -Value $injectedContent
 
 Write-Host "Uploading and executing payload on Colab A100..." -ForegroundColor Yellow
-& $colab_cmd exec -f $tempPayload
+& $colab_cmd exec --timeout 3600 -f $tempPayload
 
 # Cleanup
 Remove-Item -Path $tempPayload -ErrorAction SilentlyContinue

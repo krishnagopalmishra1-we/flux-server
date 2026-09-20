@@ -1,76 +1,44 @@
 # AGENT.md - Hyperforge AI Runtime Notes
 
-> Last updated: 2026-05-09
+> Last updated: 2026-07-04
 > This file is the shortest reliable handoff for future agents touching `flux-server/`.
 
 ## Canonical App
 
-Treat `flux-server/` as the production codebase. Root-level `app/` and older root Docker assets are legacy unless the user explicitly asks to revive them.
+Treat `flux-server/` as the production codebase. The app has been streamlined to support **image generation only** on a single A10G GPU. All video pipelines, video LoRAs, and job queueing logic (including Redis) have been completely removed.
 
 ## Production Shape
 
 - FastAPI backend in `app/main.py`
 - Image pipeline in `app/pipeline.py`
-- Video pipeline in `app/pipelines/video_pipeline.py`
-- Shared GPU runtime coordinator in `app/runtime.py`
-- Job queue/state in `app/job_queue.py`; Redis is the multi-worker backend, memory is local fallback
+- Model manager in `app/model_manager.py` (lazy-loading, memory management)
+- Shared GPU runtime coordinator in `app/runtime.py` (serializes `/generate` requests)
 - Public Hyperforge AI frontend in `app/static/`
 
-## Current Model Registry
+## Current Model Registry (Image Only)
 
-### Image
-
-| Key | Model ID | Notes |
+| Key | Model ID | Description |
 |---|---|---|
-| `flux-1-dev` | `black-forest-labs/FLUX.1-dev` | Runs in BF16 on A100. NF4 path was removed for stability after bitsandbytes load failures. |
+| `flux-1-dev` | `black-forest-labs/FLUX.1-dev` | FP8 transformer (torchao) + INT8 T5-XXL + CLIP/VAE BF16. Total ~18 GB VRAM. |
 | `sd3.5-large` | `stabilityai/stable-diffusion-3.5-large` | NF4 transformer path. |
 | `realvisxl-v5` | `SG161222/RealVisXL_V5.0` | FP16 SDXL photoreal. |
-| `juggernaut-xl` | `RunDiffusion/Juggernaut-XL-v9` | FP16 SDXL general-purpose. |
+| `juggernaut-xl` | `RunDiffusion/Juggernaut-XL-v9` | FP16 SDXL versatile. |
 
-### Video
+## Runtime & Quantization Strategies
 
-| Key | Model ID | Notes |
-|---|---|---|
-| `wan-t2v-1.3b` | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | Default video model and safest public default. |
-| `wan-t2v-14b` | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | Prefers BF16 xDiT on 4×80GB hosts, falls back to NF4 diffusers elsewhere. |
-| `wan-i2v-14b` | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | NF4 image-to-video path. |
-| `hunyuan-video` | `hunyuanvideo-community/HunyuanVideo` | NF4 transformer, CPU-offloaded text encoder. |
-
-Removed from the active surface:
-
-- Music generation
-- Animation generation
-- Broken legacy tabs wired to non-existent backend endpoints
-
-## Runtime Shapes
-
-- GCP A100 40GB: single-worker testing, one heavy model resident in VRAM at a time.
-- 8x80GB Hyperforge testing: `GPUS_PER_JOB=4`, two Gunicorn workers, Redis job backend, two concurrent WAN 14B xDiT jobs split across GPU groups.
-
-The code now reflects this:
-
-- Image and video work serialize through a shared GPU coordinator.
-- Video validation rejects settings outside per-model A100-safe limits.
-- Redis mode persists job records at `job:{job_id}` and claims queued work only through the `job_queue` sorted set.
-- Cancellation is cross-worker: DELETE writes `cancel_flag=true`; diffusers callbacks and xDiT subprocess loops re-check it.
-- Stale Redis `processing` jobs older than the watchdog threshold are marked failed at worker startup.
-- Disk-budget checks run before large LoRA writes.
-- Output cleanup is part of normal runtime hygiene.
+- **AWS g5.2xlarge**: 1 × NVIDIA A10G (24 GB VRAM).
+- **FLUX.1-dev FP8 (torchao)**:
+  - Transformer quantized to FP8 weight-only via `torchao`. Uses hardware tensor cores on Ampere architectures, accelerating inference by ~1.8× vs bitsandbytes NF4.
+  - T5-XXL text encoder loaded in INT8 via bitsandbytes. Saves ~5 GB VRAM without affecting generation speed (only runs during the initial text encoding step).
+  - VRAM footprint: ~18 GB total. Fits comfortably on the 24 GB A10G with ~6 GB headroom.
+  - Override via environment variable: `FLUX_QUANTIZE=fp8|nf4|bf16`.
 
 ## LoRA Paths
 
-Do not rely on relative `loras/` folders anymore. Use configured persistent paths:
-
-- `LORA_DIR`
-- `VIDEO_LORA_DIR`
-
-Useful diagnostics:
-
-- `GET /api/loras/diagnostics`
-- `GET /loras?model_name=flux-1-dev`
-- `GET /api/video/loras`
-
-If uploaded LoRAs are "missing", the first thing to check is whether the VM bind mount and configured directory still point at the same persistent disk path.
+- Configured persistent path: `LORA_DIR` (defaults to `/mnt/hf-cache/loras`).
+- Uploads/lists via:
+  - `GET /loras?model_name=flux-1-dev`
+  - `POST /loras/upload`
 
 ## API Auth
 
@@ -80,106 +48,24 @@ If uploaded LoRAs are "missing", the first thing to check is whether the VM bind
 
 ## Frontend Notes
 
-The current UI is public-facing Hyperforge AI:
+- SPA UI routes: `/image`, `/library`
+- Predefined image style chips.
+- **Quality presets**: Draft (15st/cfg3.0) · Balanced (25st/cfg3.5) · HQ (35st/cfg5.0) · Ultra (50st/cfg7.0)
+- **12 Unsplash sample images** across multiple visual categories.
+- **Library tab**: persistent gallery of all generated images. Supports grid/list view, lightbox, download, delete.
 
-- Routes: `/image`, `/video`, `/queue`, `/library`
-- Predefined image and video style chips
-- **Quality presets** on image tab: Draft (15st/cfg3) · Balanced (25st/cfg3.5) · HQ (35st/cfg5) · Ultra (50st/cfg7)
-- **15s video preset** (240 frames) added
-- **12 Unsplash sample images** across multiple visual categories
-- **Library tab**: persistent gallery of all generated images and videos. Filter by type, grid/list view, lightbox, download, delete.
-- Tab transition animations (`pageIn` keyframe), shimmer skeleton
-- Internal metrics like VRAM are hidden from the public UI
+## Output Store
 
-Recent bug fixes:
-
-- Restored prompt focus after rerenders
-- Reduced polling-driven rerenders to avoid constant flicker
-- Removed visible mojibake from user-facing strings
-- Queue navigation now changes the URL instead of only switching internal state
-
-Video default behavior now comes from backend model metadata:
-
-- `wan-t2v-1.3b`: `480p`, `33` frames, `30` steps, `5.0` guidance
-- `wan-t2v-14b`: `720p`, `49` frames, `32` steps, `6.0` guidance, `49/12` chunking
-- `hunyuan-video`: `720p`, `129` frames, `50` steps, `6.0` guidance
-
-## Library / Output Store
-
-`app/output_store.py` now persists generated images to disk:
-
-- `"image"` added to `SUBDIRS` — images land in `outputs/image/`
-- `library_meta.json` in `outputs/` tracks all generations (images + videos) with prompt, model, seed, timestamp
-- New methods: `record_entry()`, `list_library()`, `delete_entry()`
-- `GET /api/library` and `DELETE /api/library/{id}` wired in `main.py`
-- Images are saved best-effort; generation response is not blocked if save fails
-
-## Files Worth Reading First
-
-- `app/main.py`
-- `app/runtime.py`
-- `app/model_manager.py`
-- `app/pipeline.py`
-- `app/pipelines/video_pipeline.py`
-- `app/static/app.js`
-- `app/static/style.css`
-
-## Safe Defaults To Preserve
-
-### Image
-
-- Default model: `flux-1-dev`
-- Keep FLUX on BF16 unless there is a verified replacement for the failed NF4 image path
-
-### Video
-
-- Default model: `wan-t2v-1.3b`
-- WAN 1.3B public-safe default: `480p`, `33` frames, `30` steps
-- WAN 14B quality default: `720p`, `49` frames, `32` steps, `12` overlap
-
-These defaults are there to stay inside one A100 40GB plus limited disk, not because they are the theoretical best quality.
-
-## WAN 14B xDiT
-
-- Install `xfuser` from GitHub source, not PyPI `0.4.5`
-- The API path keeps `/api/video/generate` unchanged
-- Gunicorn workers own fixed GPU groups via `CUDA_VISIBLE_DEVICES`
-- WAN 14B xDiT jobs run through `torchrun` subprocesses launched by `app/pipelines/video_pipeline.py`
-- Each xDiT job gets a free localhost master port; do not reintroduce a fixed `29500`.
-- xDiT subprocesses must be started as a new session and killed by process group on cancel, timeout, or cleanup.
-- `XDIT_TIMEOUT_SECONDS` defaults to `14400`.
-- The helper script prints actionable stderr remediation and exits 1 if `xfuser` imports fail.
-- Standalone validation tool: `tools/wan14b_xdit_infer.py`
-
-## Deployment Context
-
-Recent production deployment target:
-
-- Project: `flux-lora-gpu-project`
-- Zone: `us-central1-a`
-- Instance: `flux-a100-preemptible`
-- App dir on VM: `/opt/flux-server`
-
-Vultr bootstrap uses `DEPLOY_BRANCH`, defaulting to `codex/hyperforge-runtime-hardening-impl` until these runtime hardening changes are merged to `main`. Do not remove the branch pin unless `main` contains the Redis/xDiT deployment code.
+`app/output_store.py` persists generated images to disk:
+- Images land in `/mnt/outputs/image/`.
+- `library_meta.json` in `/mnt/outputs/` tracks all generations with prompt, model, seed, and timestamp.
+- Endpoints: `GET /api/library`, `DELETE /api/library/{id}`.
 
 ## Verification Checklist
-
-Before calling a change done, verify:
 
 1. `/health`
 2. `/models`
 3. `/api/auth/status`
 4. `/loras`
-5. `/api/video/loras`
-6. Image generation
-7. Video generation
-8. Queue polling and SSE
-9. Cancellation
-10. Output serving
-
-## Things Not To Reintroduce Quietly
-
-- Separate image and video GPU locks
-- Public UI tabs for unsupported music or animation flows
-- Relative LoRA directories as the only storage path
-- Public-facing GPU diagnostics as core UI content
+5. `/generate` (Image generation)
+6. Output serving

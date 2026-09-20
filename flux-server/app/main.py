@@ -1,32 +1,18 @@
-import json
 import logging
 import asyncio
-import time
-import shutil
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pathlib import Path
-import hashlib
-from app.schemas import (
-    GenerateRequest, GenerateResponse, HealthResponse,
-    VideoGenerateRequest, VideoGenerateResponse,
-    JobStatusResponse, QueueStatusResponse,
-)
+
+from app.schemas import GenerateRequest, GenerateResponse, HealthResponse
 from app.security import verify_api_key, check_rate_limit
-from app.pipeline import inference_pipeline as flux_pipeline
-from app.model_manager import ModelCategory
-from app.job_queue import job_queue, JobPriority, JobStatus
+from app.pipeline import inference_pipeline, get_lora_dir
 from app.output_store import output_store
 from app.runtime import gpu_runtime
-from app.pipeline import get_lora_dir
-from app.pipelines.video_pipeline import video_pipeline
-from app.pipelines.video_pipeline import get_video_lora_dir
-from app.video_defaults import apply_video_defaults
-
 from app.config import get_settings
 
 # Configure logging
@@ -40,7 +26,7 @@ logger = logging.getLogger(__name__)
 class ContentLengthLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         settings = get_settings()
-        max_bytes = int(settings.max_request_body_mb * 1024 * 1024)
+        max_bytes = int(settings.max_request_body_mb * 1024 * 1024) if hasattr(settings, 'max_request_body_mb') else 25 * 1024 * 1024
         content_length = request.headers.get("content-length")
         try:
             request_bytes = int(content_length) if content_length else 0
@@ -49,7 +35,7 @@ class ContentLengthLimitMiddleware(BaseHTTPMiddleware):
         if request_bytes > max_bytes:
             return JSONResponse(
                 status_code=413,
-                content={"detail": f"Request body too large. Limit is {settings.max_request_body_mb}MB."},
+                content={"detail": "Request body too large."},
             )
         return await call_next(request)
 
@@ -71,20 +57,9 @@ def _validate_lora_upload(safe_name: str, contents: bytes) -> None:
         raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
 
 
-def _storage_summary(path: Path) -> dict:
-    files = list(path.glob("*.safetensors")) if path.exists() else []
-    total_bytes = sum(f.stat().st_size for f in files if f.is_file())
-    return {
-        "dir": str(path),
-        "exists": path.exists(),
-        "count": len(files),
-        "total_mb": round(total_bytes / (1024 * 1024), 1),
-        "files": sorted(f.name for f in files if f.is_file()),
-    }
-
-
 def _ensure_write_budget(path: Path, required_bytes: int, reserve_gb: float = 2.0) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    import shutil
     usage = shutil.disk_usage(str(path))
     reserve_bytes = int(reserve_gb * 1024 * 1024 * 1024)
     if usage.free - required_bytes < reserve_bytes:
@@ -97,157 +72,30 @@ def _ensure_write_budget(path: Path, required_bytes: int, reserve_gb: float = 2.
         )
 
 
-# ═══════════════════════════════════════════════════
-#  JOB HANDLERS — Connect job queue to pipelines
-# ═══════════════════════════════════════════════════
-
-def get_user_id(request: Request) -> str:
-    """Hash the client IP to a stable, non-PII identifier."""
-    host = request.client.host if request.client else "unknown"
-    return hashlib.sha256(f"app_salt_{host}".encode()).hexdigest()[:16]
-
-def _handle_video_job(job) -> dict:
-    """Process a video generation job with real-time progress reporting.
-
-    Called by job_queue._run_handler_in_thread inside asyncio.to_thread, so it
-    is already off the main event loop — no nested event loop needed.
-    """
-    payload = apply_video_defaults(job.model_name, job.payload)
-
-    # Unload image model before loading video model. The shared GPU lock prevents
-    # image generation from unloading this video model mid-inference.
-    flux_pipeline.model_manager.unload_all()
-
-    # Check disk space before starting generation
-    output_store.check_disk_space(min_gb=10.0)
-
-    def _progress(pct: float):
-        job_queue.set_progress(job.id, pct)
-
-    if payload.get("source_image_b64"):
-        return video_pipeline.generate_image_to_video(
-            source_image_b64=payload["source_image_b64"],
-            prompt=payload.get("prompt", ""),
-            model_name=job.model_name,
-            num_frames=payload["num_frames"],
-            fps=payload["fps"],
-            guidance_scale=payload["guidance_scale"],
-            num_inference_steps=payload["num_inference_steps"],
-            seed=payload.get("seed"),
-            lora_name=payload.get("lora_name"),
-            lora_scale=payload.get("lora_scale", 1.0),
-            job_id=job.id,
-            progress_callback=_progress,
-            job=job,
-        )
-    elif job.model_name == "hunyuan-video":
-        return video_pipeline.generate_hunyuan_video(
-            prompt=payload["prompt"],
-            resolution=payload["resolution"],
-            num_frames=payload["num_frames"],
-            fps=payload["fps"],
-            guidance_scale=payload["guidance_scale"],
-            num_inference_steps=payload["num_inference_steps"],
-            seed=payload.get("seed"),
-            job_id=job.id,
-            progress_callback=_progress,
-            job=job,
-        )
-    else:
-        num_frames = payload["num_frames"]
-        chunk_size = payload["chunk_size"]
-
-        # Auto-detect: use chunked generation for long videos
-        if num_frames > chunk_size:
-            return video_pipeline.generate_long_video(
-                prompt=payload["prompt"],
-                model_name=job.model_name,
-                negative_prompt=payload.get("negative_prompt", ""),
-                resolution=payload["resolution"],
-                total_frames=num_frames,
-                chunk_size=chunk_size,
-                chunk_overlap=payload["chunk_overlap"],
-                fps=payload["fps"],
-                guidance_scale=payload["guidance_scale"],
-                num_inference_steps=payload["num_inference_steps"],
-                seed=payload.get("seed"),
-                lora_name=payload.get("lora_name"),
-                lora_scale=payload.get("lora_scale", 1.0),
-                job_id=job.id,
-                progress_callback=_progress,
-                job=job,
-            )
-        else:
-            return video_pipeline.generate_text_to_video(
-                prompt=payload["prompt"],
-                model_name=job.model_name,
-                negative_prompt=payload.get("negative_prompt", ""),
-                resolution=payload["resolution"],
-                num_frames=num_frames,
-                fps=payload["fps"],
-                guidance_scale=payload["guidance_scale"],
-                num_inference_steps=payload["num_inference_steps"],
-                chunk_size=payload["chunk_size"],
-                chunk_overlap=payload["chunk_overlap"],
-                seed=payload.get("seed"),
-                lora_name=payload.get("lora_name"),
-                lora_scale=payload.get("lora_scale", 1.0),
-                job_id=job.id,
-                progress_callback=_progress,
-                job=job,
-            )
-async def _preload_video_model_background():
-    """Background pre-load — DISABLED: holds the GPU lock for 15-20min on cold start, blocking
-    incoming jobs at 0% progress for the entire model download/load duration. Models load
-    on first request instead; the 1800s watchdog timeout accommodates first-run load time."""
-    logger.info("Video pre-load: disabled (first request will trigger model load)")
-    return
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the model on startup, register job handlers, cleanup on shutdown."""
-    logger.info("Starting Neural Creation Studio...")
-
-    # Register job handlers for async generation
-    job_queue.register_handler("video", _handle_video_job)
-
-    # Share the single GPU lock with the job queue so video jobs serialize with
-    # image generation and cannot race model unload/load operations.
-    job_queue.gpu_lock = gpu_runtime.lock
+    """Create output directories and manage lifecycle."""
+    logger.info("Starting Neural Creation Studio (Image Only)...")
 
     # Create output directories
     settings = get_settings()
-    if job_queue.is_redis_backend:
-        try:
-            await job_queue.start()
-        except Exception as exc:
-            logger.critical("Fatal: Redis job backend is configured but unreachable: %s", exc)
-            raise
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.output_dir).joinpath("image").mkdir(exist_ok=True)
-    Path(settings.output_dir).joinpath("video").mkdir(exist_ok=True)
     get_lora_dir().mkdir(parents=True, exist_ok=True)
-    get_video_lora_dir().mkdir(parents=True, exist_ok=True)
 
     # Schedule periodic output cleanup (runs every hour, deletes files older than TTL)
     cleanup_task = asyncio.create_task(_periodic_output_cleanup())
 
-    # Keep startup fast and responsive; launch background model pre-loading
-    # while server immediately becomes ready to accept requests.
-    logger.info("Server ready to accept requests (video models load on first request)")
-    preload_task = asyncio.create_task(_preload_video_model_background())
+    logger.info("Server ready to accept image requests")
     yield
     # Cleanup on shutdown
     logger.info("Shutting down, releasing GPU memory...")
     cleanup_task.cancel()
-    preload_task.cancel()
     try:
-        await preload_task
+        await cleanup_task
     except asyncio.CancelledError:
         pass
-    flux_pipeline.model_manager.unload_all()
-    video_pipeline.unload()
+    inference_pipeline.model_manager.unload_all()
 
 
 async def _periodic_output_cleanup():
@@ -264,13 +112,12 @@ async def _periodic_output_cleanup():
 
 app = FastAPI(
     title="Neural Creation Studio API",
-    description="AI generation platform: Image and Video. Powered by FLUX and Wan 2.2.",
+    description="AI generation platform: Image generation powered by FLUX.",
     version="3.0.0",
     lifespan=lifespan,
 )
 
-# CORS — uses cors_origins from config (defaults to "*" for dev).
-# In production, set CORS_ORIGINS="https://your-frontend.com" in .env.
+# CORS
 _cors_settings = get_settings()
 _cors_origins = (
     [o.strip() for o in _cors_settings.cors_origins.split(",")]
@@ -289,15 +136,14 @@ app.add_middleware(ContentLengthLimitMiddleware)
 @app.get("/health", response_model=HealthResponse)
 async def health():
     """Check server health, GPU status, and model loading state."""
-    gpu = flux_pipeline.gpu_info()
+    gpu = inference_pipeline.gpu_info()
     return HealthResponse(
         status="healthy",
         gpu_name=gpu["name"],
         vram_total_gb=gpu["total_gb"],
         vram_used_gb=gpu["used_gb"],
-        model_loaded=flux_pipeline.is_loaded,
-        current_model=flux_pipeline.model_manager.current_model,
-        queue=job_queue.queue_stats(),
+        model_loaded=inference_pipeline.is_loaded,
+        current_model=inference_pipeline.model_manager.current_model,
     )
 
 
@@ -313,17 +159,15 @@ async def auth_status():
 
 
 @app.get("/models")
-async def list_models(category: str = None):
-    """List available generation models and metadata, optionally filtered by category."""
-    cat_filter = ModelCategory(category) if category else None
-    models = flux_pipeline.model_manager.list_models(cat_filter)
+async def list_models():
+    """List available generation models and metadata."""
+    models = inference_pipeline.model_manager.list_models()
     return {
-        "current_model": flux_pipeline.model_manager.current_model,
-        "categories": flux_pipeline.model_manager.get_categories(),
+        "current_model": inference_pipeline.model_manager.current_model,
         "models": [
             {
                 "name": name,
-                **flux_pipeline.model_manager.get_model_info(name),
+                **inference_pipeline.model_manager.get_model_info(name),
                 "summary": summary,
             }
             for name, summary in models.items()
@@ -337,22 +181,8 @@ async def list_loras(model_name: str = "flux-1-dev"):
     return {
         "model_name": model_name,
         "lora_dir": str(get_lora_dir()),
-        "recommended_scale": flux_pipeline.get_recommended_lora_scale(model_name),
-        "loras": flux_pipeline.get_compatible_loras(model_name),
-    }
-
-
-@app.get("/api/loras/diagnostics")
-async def lora_diagnostics():
-    """Show configured LoRA storage paths and visible adapter files."""
-    return {
-        "image": flux_pipeline.lora_storage_stats(),
-        "video": video_pipeline.lora_storage_stats(),
-        "legacy_paths": {
-            "image": _storage_summary(Path("loras")),
-            "video": _storage_summary(Path("video_loras")),
-        },
-        "max_upload_mb": get_settings().max_lora_upload_mb,
+        "recommended_scale": inference_pipeline.get_recommended_lora_scale(model_name),
+        "loras": inference_pipeline.get_compatible_loras(model_name),
     }
 
 
@@ -362,7 +192,7 @@ async def upload_lora(file: UploadFile = File(...)):
     if not file.filename.endswith(".safetensors"):
         raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
 
-    # Sanitize filename — strip any path components
+    # Sanitize filename
     safe_name = Path(file.filename).name
     if not safe_name or safe_name != file.filename.replace("\\", "/").split("/")[-1]:
         raise HTTPException(status_code=400, detail="Invalid filename.")
@@ -380,15 +210,9 @@ async def upload_lora(file: UploadFile = File(...)):
     return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents), "dir": str(lora_dir)}
 
 
-
-
-
 def _run_image_generation(req: GenerateRequest) -> tuple[str, int, float]:
-    """Run image inference in a worker thread (CPU-bound / GPU-bound)."""
-    # Unload any video model to free VRAM for image model.
-    video_pipeline.unload()
-
-    return flux_pipeline.generate(
+    """Run image inference in a worker thread."""
+    return inference_pipeline.generate(
         prompt=req.prompt,
         negative_prompt=req.negative_prompt,
         model_name=req.model_name,
@@ -424,7 +248,7 @@ async def generate(
         logger.exception("Unexpected error during image generation")
         raise HTTPException(status_code=500, detail="Image generation failed. Check server logs.")
 
-    # Persist to disk and record in library (best-effort — don't fail the response)
+    # Persist to disk and record in library (best-effort)
     try:
         import base64
         img_bytes = base64.b64decode(img_b64)
@@ -451,236 +275,10 @@ async def generate(
     )
 
 
-
-
-
-# ═══════════════════════════════════════════════════
-#  VIDEO GENERATION ENDPOINTS
-# ═══════════════════════════════════════════════════
-
-
-@app.post("/api/video/generate", response_model=VideoGenerateResponse)
-async def generate_video(req: VideoGenerateRequest, request: Request):
-    """Submit a video generation job (text-to-video or image-to-video)."""
-    settings = get_settings()
-    if not settings.enable_video:
-        raise HTTPException(status_code=503, detail="Video generation is disabled.")
-
-    check_rate_limit(request, "")
-    try:
-        output_store.check_disk_space(min_gb=10.0)
-    except RuntimeError as e:
-        raise HTTPException(status_code=507, detail=str(e))
-
-    try:
-        job = await job_queue.submit(
-            job_type="video",
-            model_name=req.model_name,
-            payload=req.model_dump(),
-            priority=JobPriority.SLOW,
-            user_id=get_user_id(request),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=429, detail=str(e))
-
-    position = job_queue.get_queue_position(job.id)
-    return VideoGenerateResponse(
-        job_id=job.id,
-        status=job.status.value,
-        queue_position=position,
-    )
-
-
-# ═══════════════════════════════════════════════════
-#  JOB STATUS ENDPOINTS
-# ═══════════════════════════════════════════════════
-
-
-@app.get("/api/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str):
-    """Poll the status of a generation job."""
-    job = job_queue.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-
-    position = job_queue.get_queue_position(job_id)
-    return JobStatusResponse(
-        job_id=job.id,
-        job_type=job.job_type,
-        model_name=job.model_name,
-        status=job.status.value,
-        progress=job.progress,
-        result=job.result,
-        error_message=job.error_message,
-        queue_position=position,
-        queue_time_ms=job.queue_time_ms,
-        processing_time_ms=job.processing_time_ms,
-        estimated_seconds_remaining=job.estimated_seconds_remaining,
-    )
-
-
-@app.get("/api/jobs")
-async def list_jobs(request: Request, status: str = None, limit: int = 20):
-    """List recent jobs for the current user."""
-    user_id = get_user_id(request)
-    status_filter = JobStatus(status) if status else None
-    jobs = job_queue.list_jobs(user_id=user_id, status=status_filter, limit=limit)
-    return {"jobs": jobs, "total": len(jobs)}
-
-
-@app.delete("/api/jobs/{job_id}")
-async def cancel_job(job_id: str):
-    """Cancel a queued or processing job."""
-    if job_queue.cancel_job(job_id):
-        return {"status": "cancelled", "job_id": job_id}
-    raise HTTPException(
-        status_code=400,
-        detail="Job cannot be cancelled (not found or already completed)."
-    )
-
-
-@app.get("/api/queue/status", response_model=QueueStatusResponse)
-async def queue_status():
-    """Get current queue statistics."""
-    stats = job_queue.queue_stats()
-    return QueueStatusResponse(**stats)
-
-
-@app.post("/api/admin/queue/drain")
-async def drain_queue(request: Request):
-    """Cancel all queued jobs and set cancel_flag on processing jobs.
-
-    Requires Admin-Key header matching the admin_api_key config.
-    """
-    settings = get_settings()
-    admin_key = request.headers.get("Admin-Key", "")
-    if not settings.admin_api_key or admin_key != settings.admin_api_key:
-        raise HTTPException(status_code=403, detail="Invalid or missing Admin-Key.")
-
-    drained = job_queue.drain()
-    cancelled = drained["cancelled"]
-    flagged = drained["flagged"]
-
-    logger.warning(f"Admin queue drain: cancelled {cancelled} queued, flagged {flagged} processing")
-    return {"cancelled": cancelled, "flagged_for_cancel": flagged}
-
-
-# ═══════════════════════════════════════════════════
-#  SSE — Real-time job progress streaming
-# ═══════════════════════════════════════════════════
-
-@app.get("/api/jobs/{job_id}/stream")
-async def stream_job_progress(job_id: str, request: Request):
-    """
-    Server-Sent Events endpoint for real-time job progress.
-
-    Client connects once per job; receives JSON events:
-      data: {"progress": 42.5, "status": "processing"}
-      data: {"progress": 100.0, "status": "completed", "result": {...}}
-    Connection closes automatically on job completion/failure.
-    """
-    job = job_queue.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-
-    async def event_generator():
-        q = job_queue.subscribe_progress(job_id)
-        try:
-            # Immediately send current state
-            current = job_queue.get_job(job_id)
-            if current:
-                payload = {"progress": current.progress, "status": current.status.value}
-                if current.status.value in ("completed", "failed", "cancelled"):
-                    payload["result"] = current.result
-                    payload["error"] = current.error_message
-                yield f"data: {json.dumps(payload)}\n\n"
-                if (
-                    job_queue.is_redis_backend
-                    and current.status.value == "processing"
-                    and current.owner_id
-                    and current.owner_id != job_queue.worker_id
-                ):
-                    yield f"data: {json.dumps({'mode': 'poll', 'status': current.status.value, 'progress': current.progress})}\n\n"
-                    return
-
-            # Stream updates until terminal state or client disconnect
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(q.get(), timeout=1.0)
-                    # Re-fetch job for result payload on completion
-                    updated = job_queue.get_job(job_id)
-                    if updated and updated.status.value in ("completed", "failed", "cancelled"):
-                        event["result"] = updated.result
-                        event["error"] = updated.error_message
-                    yield f"data: {json.dumps(event)}\n\n"
-                    if event.get("status") in ("completed", "failed", "cancelled"):
-                        break
-                except asyncio.TimeoutError:
-                    # Heartbeat — keeps connection alive through proxies
-                    j = job_queue.get_job(job_id)
-                    if j:
-                        hb = {"progress": j.progress, "status": j.status.value}
-                        yield f"data: {json.dumps(hb)}\n\n"
-                        if j.status.value in ("completed", "failed", "cancelled"):
-                            break
-        finally:
-            job_queue.unsubscribe_progress(job_id, q)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ═══════════════════════════════════════════════════
-#  VIDEO LORA ENDPOINTS
-# ═══════════════════════════════════════════════════
-
-@app.get("/api/video/loras")
-async def list_video_loras():
-    """List LoRA files available for video models."""
-    loras = video_pipeline.get_available_loras()
-    return {"loras": loras, "count": len(loras), "lora_dir": str(get_video_lora_dir())}
-
-
-@app.post("/api/video/loras/upload")
-async def upload_video_lora(file: UploadFile = File(...)):
-    """Upload a .safetensors LoRA adapter for video models."""
-    if not file.filename.endswith(".safetensors"):
-        raise HTTPException(status_code=400, detail="Only .safetensors files are allowed.")
-    safe_name = Path(file.filename).name
-    if (
-        not safe_name
-        or ".." in safe_name
-        or safe_name != file.filename.replace("\\", "/").split("/")[-1]
-    ):
-        raise HTTPException(status_code=400, detail="Invalid filename.")
-    lora_dir = get_video_lora_dir()
-    lora_dir.mkdir(parents=True, exist_ok=True)
-    dest = lora_dir / safe_name
-    contents = await file.read()
-    _validate_lora_upload(safe_name, contents)
-    _ensure_write_budget(lora_dir, len(contents))
-    dest.write_bytes(contents)
-    logger.info("Video LoRA uploaded: %s (%d bytes)", safe_name, len(contents))
-    return {"status": "uploaded", "filename": safe_name, "size_bytes": len(contents), "dir": str(lora_dir)}
-
-
-# ═══════════════════════════════════════════════════
-#  LIBRARY ENDPOINTS
-# ═══════════════════════════════════════════════════
-
-
 @app.get("/api/library")
-async def get_library(type: str = "all", limit: int = 200, offset: int = 0):
-    """Return all saved library items (images + videos), newest first."""
-    return output_store.list_library(type_filter=type, limit=limit, offset=offset)
+async def get_library(limit: int = 200, offset: int = 0):
+    """Return saved library items, newest first."""
+    return output_store.list_library(type_filter="image", limit=limit, offset=offset)
 
 
 @app.delete("/api/library/{item_id}")
@@ -690,11 +288,6 @@ async def delete_library_item(item_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Library item not found.")
     return {"status": "deleted", "id": item_id}
-
-
-# ═══════════════════════════════════════════════════
-#  STATIC FILES & OUTPUT SERVING
-# ═══════════════════════════════════════════════════
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -708,7 +301,6 @@ try:
     _output_path = Path(_settings.output_dir)
     _output_path.mkdir(parents=True, exist_ok=True)
     (_output_path / "image").mkdir(exist_ok=True)
-    (_output_path / "video").mkdir(exist_ok=True)
     app.mount("/outputs", StaticFiles(directory=str(_output_path)), name="outputs")
 except Exception as _e:
     logger.warning(f"Could not mount output directory: {_e}. Will be created at startup.")
@@ -722,6 +314,6 @@ async def root_ui():
 @app.get("/{page_name:path}", include_in_schema=False)
 async def routed_ui(page_name: str):
     """Serve the SPA shell for public UI routes."""
-    if page_name in {"image", "video", "queue", "library"}:
+    if page_name in {"image", "library"}:
         return FileResponse(STATIC_DIR / "index.html")
     raise HTTPException(status_code=404, detail="Not found")

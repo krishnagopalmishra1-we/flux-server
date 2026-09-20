@@ -1,40 +1,23 @@
-services:
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
+# Clean image-generation only compose file.
+# Runs FLUX.1-dev using FP8 on single or multiple GPUs.
 
+services:
   flux-server:
     build: .
     user: "0:0"
     ports:
       - "8080:8080"
     volumes:
-      # HDD — all video/music/animation models (WAN 14B=118G, I2V 14B=118G etc.)
+      # Model cache locations
       - /mnt/hf-cache-disk:/mnt/hf-cache
-      # SSD (250GB total, 128GB free): FLUX 32G + HunyuanVideo ~20G + WAN 1.3B 27G = ~79G.
-      # WAN 14B (118G each) stays on HDD — too large for SSD.
       - model_cache_ssd:/app/model_cache
       - outputs:/mnt/outputs
-      # Legacy bind mounts kept for migration/inspection. Runtime LoRA paths
-      # default to /mnt/hf-cache/loras and /mnt/hf-cache/video_loras.
+      # LoRA adapters
       - ./loras:/app/loras
-      - ./video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-      - VIDEO_PARALLEL_BACKEND=auto
-      - GPUS_PER_JOB=4
-      - JOB_BACKEND=redis
-      - REDIS_URL=redis://redis:6379/0
-      # Set HF_OFFLINE=true in .env after first successful model download
-      # to eliminate HF network metadata round-trips on every load.
+      - MODEL_ID=black-forest-labs/FLUX.1-dev
+      - FLUX_QUANTIZE=fp8
     env_file:
       - .env
     shm_size: '16g'
@@ -46,12 +29,7 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
 
 volumes:
-  redis_data:
   outputs:
-  # SSD-resident model cache — survives container rebuilds, stored on boot disk.
   model_cache_ssd:

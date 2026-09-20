@@ -59,12 +59,12 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 # ── Create LoRA directories (need to exist before container starts) ────────────
-mkdir -p "$FLUX_DIR/loras" "$FLUX_DIR/video_loras"
+mkdir -p "$FLUX_DIR/loras"
 
 # ── Create placeholder model-disk dirs so container can start even without data ─
 # Actual persistent data goes on the EBS disk (setup_disks.sh).
-mkdir -p /mnt/model-disk/{hf-cache,model-cache-ssd,outputs/video,loras,video_loras}
-chmod 777 /mnt/model-disk/outputs /mnt/model-disk/outputs/video
+mkdir -p /mnt/model-disk/{hf-cache,model-cache-ssd,outputs/image,loras}
+chmod 777 /mnt/model-disk/outputs /mnt/model-disk/outputs/image
 
 echo "=== Bootstrap complete at $(date) ==="
 echo ""

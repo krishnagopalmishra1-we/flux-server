@@ -1,21 +1,12 @@
-﻿/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   Neural Creation Studio â€” Multi-Modal AI Frontend
-   Image Â· Video
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+/* ══════════════════════════════════════════════════════════════════════════
+   Hyperforge AI Creative Studio — Image Generation Frontend
+   ══════════════════════════════════════════════════════════════════════════ */
 
 const RESOLUTION_PRESETS = [
   { label: "Square",    width: 1024, height: 1024 },
   { label: "Portrait",  width: 896,  height: 1152 },
   { label: "Landscape", width: 1152, height: 896  },
   { label: "Wide",      width: 1344, height: 768  },
-];
-
-const VIDEO_FRAME_PRESETS = [
-  { label: "1s",  frames: 16 },
-  { label: "2s",  frames: 33 },
-  { label: "3s",  frames: 49 },
-  { label: "5s",  frames: 81 },
-  { label: "15s", frames: 240 },
 ];
 
 const QUALITY_PRESETS = [
@@ -97,99 +88,68 @@ const IMAGE_STYLES = [
   { id:"concept", label:"Concept Art", suffix:"high-end concept art, cinematic worldbuilding, atmospheric scale, intricate design language" },
 ];
 
-const VIDEO_STYLES = [
-  { id:"cinematic", label:"Cinematic", suffix:"cinematic camera movement, soft depth of field, premium color grade, smooth motion" },
-  { id:"commercial", label:"Commercial", suffix:"bright commercial look, clean product reveal, controlled studio motion, polished lighting" },
-  { id:"dream", label:"Dreamlike", suffix:"ethereal movement, glowing atmosphere, graceful transitions, surreal cinematic mood" },
-  { id:"anime", label:"Anime Motion", suffix:"anime style motion, dynamic framing, expressive lighting, clean animated composition" },
-  { id:"documentary", label:"Documentary", suffix:"natural handheld camera feel, realistic movement, grounded lighting, observational detail" },
-];
-
 const TAB_PATHS = {
   image:   "/image",
-  video:   "/video",
-  queue:   "/queue",
   library: "/library",
 };
 
 const state = {
   activeTab: "image",
-  models: [], videoModels: [],
-  health: null, categories: [],
+  models: [],
+  health: null,
   auth: {
     apiKey: localStorage.getItem("ncs_api_key") || "",
     required: false,
     configuredKeyCount: 0,
   },
-  // Image
-  history: [], loading: false, error: "", result: null, lightbox: null,
+  history: [],
+  loading: false,
+  error: "",
+  result: null,
+  lightbox: null,
   loraUploadStatus: null,
   form: {
-    prompt: "", negative_prompt: "", model_name: "flux-1-dev",
-    width: 1024, height: 1024, num_inference_steps: 28,
-    guidance_scale: 3.5, seed: "", lora_name: "None", lora_scale: 0.85,
+    prompt: "",
+    negative_prompt: "",
+    model_name: "flux-1-dev",
+    width: 1024,
+    height: 1024,
+    num_inference_steps: 28,
+    guidance_scale: 3.5,
+    seed: "",
+    lora_name: "None",
+    lora_scale: 0.85,
     style_id: "cinematic",
   },
   loras: ["None"],
-  // Video
-  videoForm: {
-    prompt: "", negative_prompt: "", model_name: "wan-t2v-1.3b",
-    resolution: "480p", num_frames: 33, fps: 16,
-    guidance_scale: 5.0, num_inference_steps: 30, seed: "",
-    source_image_b64: null, lora_name: "None", lora_scale: 1.0,
-    style_id: "cinematic",
-  },
-  videoSourceName: "",
-  videoLoras: ["None"],
-  videoLoraUploadStatus: null,
-  // Jobs
-  jobs: [],
-  queueStats: { queued: 0, processing: 0, completed: 0, failed: 0, total: 0 },
-  // Library
-  library: [], libraryTotal: 0, libraryFilter: "all", libraryView: "grid", libraryLightbox: null,
-  // Active SSE connections: jobId -> EventSource
-  _sseConnections: {},
+  library: [],
+  libraryTotal: 0,
+  libraryView: "grid",
+  libraryLightbox: null,
 };
 
 const root = document.getElementById("root");
 
-/* â”€â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Utilities ─────────────────────────────────────────────────────────── */
 
 function escapeHtml(v) {
   return String(v ?? "")
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
-function formatMs(ms)  { return ms  ? `${(ms/1000).toFixed(2)}s` : "-"; }
-function formatDur(s)  { if (!s) return "-"; const m=Math.floor(s/60),r=Math.round(s%60); return m>0?`${m}m ${r}s`:`${r}s`; }
+function formatMs(ms)  { return ms ? `${(ms/1000).toFixed(2)}s` : "-"; }
 function activeModel() { return state.models.find(m=>m.name===state.form.model_name)||null; }
-function activeVideoModel() { return state.videoModels.find(m=>m.name===state.videoForm.model_name)||null; }
 function imageSrc(r)   { return r?.image_base64 ? `data:image/png;base64,${r.image_base64}` : ""; }
 
 function selectedImageStyle() { return IMAGE_STYLES.find(s=>s.id===state.form.style_id)||IMAGE_STYLES[0]; }
-function selectedVideoStyle() { return VIDEO_STYLES.find(s=>s.id===state.videoForm.style_id)||VIDEO_STYLES[0]; }
 function styledPrompt(prompt, style) {
   const base = (prompt || "").trim();
   if (!style?.suffix || !base) return base;
   return `${base}, ${style.suffix}`;
 }
 function tabFromPath(path = window.location.pathname) {
-  if (path.startsWith("/video"))   return "video";
-  if (path.startsWith("/queue"))   return "queue";
   if (path.startsWith("/library")) return "library";
   return "image";
-}
-
-function statusBadge(status) {
-  const map={
-    queued:     {cls:"badge-queued",    icon:"", text:"Queued"},
-    processing: {cls:"badge-processing",icon:"", text:"Processing"},
-    completed:  {cls:"badge-done",      icon:"", text:"Done"},
-    failed:     {cls:"badge-fail",      icon:"", text:"Failed"},
-    cancelled:  {cls:"badge-cancel",    icon:"", text:"Cancelled"},
-  };
-  const s=map[status]||{cls:"",icon:"?",text:status};
-  return `<span class="status-badge ${s.cls}">${s.icon ? `${s.icon} ` : ""}${s.text}</span>`;
 }
 
 function fileToBase64(file) {
@@ -201,17 +161,7 @@ function fileToBase64(file) {
   });
 }
 
-function progressBar(pct, status) {
-  if (status !== "processing") return "";
-  const safe = Math.max(0, Math.min(100, pct||0));
-  return `
-    <div class="job-progress" title="${safe.toFixed(0)}% complete">
-      <div class="job-progress-bar" style="width:${safe}%"></div>
-    </div>
-    <div class="job-progress-label">${safe.toFixed(0)}%</div>`;
-}
-
-/* â”€â”€â”€ API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── API ───────────────────────────────────────────────────────────────── */
 
 function authHeaders(headers = {}) {
   const merged = {...headers};
@@ -251,9 +201,7 @@ async function loadHealth() {
 async function loadModels() {
   try {
     const { data } = await fetchJson("/models");
-    state.models      = (data.models||[]).filter(m=>m.category==="image");
-    state.videoModels = (data.models||[]).filter(m=>m.category==="video");
-    state.categories  = data.categories||[];
+    state.models = (data.models||[]);
     const cur = data.current_model || state.models[0]?.name || "flux-1-dev";
     const info = state.models.find(m=>m.name===cur);
     state.form.model_name = cur;
@@ -261,20 +209,8 @@ async function loadModels() {
       state.form.num_inference_steps = info.default_steps ?? state.form.num_inference_steps;
       state.form.guidance_scale = info.default_guidance_scale ?? state.form.guidance_scale;
     }
-    applyVideoModelDefaults(state.videoForm.model_name, { force: true });
-    await Promise.all([loadLoras(cur), loadVideoLoras()]);
+    await loadLoras(cur);
   } catch { state.models=[]; render(); }
-}
-
-function applyVideoModelDefaults(modelName, opts = {}) {
-  const info = state.videoModels.find(m => m.name === modelName);
-  if (!info) return;
-  state.videoForm.model_name = modelName;
-  if (opts.force || !state.videoForm.resolution) state.videoForm.resolution = info.default_resolution || state.videoForm.resolution;
-  if (opts.force || !state.videoForm.num_frames) state.videoForm.num_frames = info.default_num_frames ?? state.videoForm.num_frames;
-  if (opts.force || !state.videoForm.fps) state.videoForm.fps = info.default_fps ?? state.videoForm.fps;
-  state.videoForm.num_inference_steps = info.default_steps ?? state.videoForm.num_inference_steps;
-  state.videoForm.guidance_scale = info.default_guidance_scale ?? state.videoForm.guidance_scale;
 }
 
 async function loadLoras(modelName) {
@@ -287,88 +223,28 @@ async function loadLoras(modelName) {
   render();
 }
 
-async function loadVideoLoras() {
+async function loadLibrary() {
   try {
-    const { data } = await fetchJson("/api/video/loras");
-    state.videoLoras = ["None", ...(data.loras||[])];
-    if (!state.videoLoras.includes(state.videoForm.lora_name)) {
-      state.videoForm.lora_name = "None";
-    }
-  } catch { state.videoLoras=["None"]; }
-  render();
-}
-
-async function loadJobs() {
-  const before = JSON.stringify({
-    jobs: state.jobs.map(j=>[j.job_id,j.status,j.progress,j.processing_time_ms,j.error_message]),
-    queue: state.queueStats,
-  });
-  try {
-    const { data } = await fetchJson("/api/jobs?limit=30");
-    state.jobs = data.jobs||[];
-  } catch { state.jobs=[]; }
-  try {
-    const { data } = await fetchJson("/api/queue/status");
-    state.queueStats = data;
-  } catch {}
-  const after = JSON.stringify({
-    jobs: state.jobs.map(j=>[j.job_id,j.status,j.progress,j.processing_time_ms,j.error_message]),
-    queue: state.queueStats,
-  });
-  return before !== after;
-}
-
-/* â”€â”€â”€ Image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-
-async function loadLibrary(filter) {
-
-  const f = filter !== undefined ? filter : state.libraryFilter;
-
-  state.libraryFilter = f;
-
-  try {
-
-    const { data } = await fetchJson(`/api/library?type=${encodeURIComponent(f)}&limit=200`);
-
+    const { data } = await fetchJson(`/api/library?limit=200`);
     state.library = data.items || [];
-
     state.libraryTotal = data.total || 0;
-
   } catch { state.library = []; }
-
   render();
-
 }
-
-
 
 async function deleteLibraryItem(id) {
-
   try {
-
     await fetchJson(`/api/library/${encodeURIComponent(id)}`, { method: 'DELETE' });
-
     await loadLibrary();
-
   } catch {}
-
 }
 
-
-
 function applyQualityPreset(id) {
-
   const p = QUALITY_PRESETS.find(q => q.id === id);
-
   if (!p) return;
-
   state.form.num_inference_steps = p.steps;
-
   state.form.guidance_scale = p.guidance;
-
   render();
-
 }
 
 function applyModel(name) {
@@ -405,19 +281,6 @@ async function uploadLora(file) {
   setTimeout(()=>{ state.loraUploadStatus=null; render(); }, 4500);
 }
 
-async function uploadVideoLora(file) {
-  state.videoLoraUploadStatus = "uploading"; render();
-  const form = new FormData(); form.append("file", file);
-  try {
-    const r = await fetch("/api/video/loras/upload", { method:"POST", headers:authHeaders(), body:form });
-    const d = await r.json();
-    state.videoLoraUploadStatus = r.ok ? "ok:"+d.filename : "err:"+(d?.detail||"Upload failed");
-    if (r.ok) await loadVideoLoras();
-  } catch { state.videoLoraUploadStatus = "err:Network error"; }
-  render();
-  setTimeout(()=>{ state.videoLoraUploadStatus=null; render(); }, 4500);
-}
-
 async function onGenerate(e) {
   e.preventDefault();
   state.error=""; state.loading=true; render();
@@ -451,112 +314,6 @@ async function onGenerate(e) {
     }
   } catch { state.error="Request failed. Check server/network."; }
   state.loading=false; render(); loadHealth();
-}
-
-/* â”€â”€â”€ Video â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-async function onVideoGenerate(e) {
-  e.preventDefault(); state.error="";
-  const f = state.videoForm;
-  const style = selectedVideoStyle();
-  const payload = {
-    prompt: styledPrompt(f.prompt, style),
-    negative_prompt: f.negative_prompt||null,
-    model_name: f.model_name,
-    resolution: f.resolution,
-    num_frames: Number(f.num_frames),
-    fps: Number(f.fps),
-    guidance_scale: Number(f.guidance_scale),
-    num_inference_steps: Number(f.num_inference_steps),
-    seed: f.seed===""?null:Number(f.seed),
-    source_image_b64: f.source_image_b64||null,
-    lora_name: !f.lora_name||f.lora_name==="None"?null:f.lora_name,
-    lora_scale: Number(f.lora_scale),
-  };
-  try {
-    const { response, data } = await fetchJson("/api/video/generate",{
-      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      state.error = response.status === 401
-        ? "Invalid or missing API key. Enter the server API key in the API Key field."
-        : (data?.detail||"Video generation failed.");
-      render(); return;
-    }
-    startJobSSE(data.job_id);
-  } catch { state.error="Request failed. Check server/network."; }
-  render();
-  await loadJobs(); render();
-}
-
-/* â”€â”€â”€ SSE Job Streaming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-function startJobSSE(jobId) {
-  if (state._sseConnections[jobId]) return;
-  const es = new EventSource(`/api/jobs/${jobId}/stream`);
-  state._sseConnections[jobId] = es;
-
-  es.onmessage = (evt) => {
-    try {
-      const msg = JSON.parse(evt.data);
-      // Upsert job in state
-      const idx = state.jobs.findIndex(j=>j.job_id===jobId);
-      const current = idx>=0 ? {...state.jobs[idx]} : { job_id: jobId };
-      current.status   = msg.status || current.status;
-      current.progress = msg.progress ?? current.progress ?? 0;
-      if (msg.result)  current.result = msg.result;
-      if (msg.error)   current.error_message = msg.error;
-      if (idx>=0) state.jobs[idx]=current; else state.jobs.unshift(current);
-
-      const terminal = ["completed","failed","cancelled"].includes(msg.status);
-      if (terminal) {
-        es.close();
-        delete state._sseConnections[jobId];
-        loadJobs();
-      }
-      render();
-    } catch {}
-  };
-
-  es.onerror = () => {
-    es.close();
-    delete state._sseConnections[jobId];
-    // Fallback: poll once
-    setTimeout(() => startJobPolling(jobId), 2000);
-  };
-}
-
-/* â”€â”€â”€ Polling fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-const _pollingTimers = {};
-
-function startJobPolling(jobId) {
-  if (_pollingTimers[jobId] || state._sseConnections[jobId]) return;
-  _pollingTimers[jobId] = setInterval(async()=>{
-    try {
-      const { data } = await fetchJson(`/api/jobs/${jobId}`);
-      const idx = state.jobs.findIndex(j=>j.job_id===jobId);
-      if (idx>=0) state.jobs[idx]=data; else state.jobs.unshift(data);
-      if (["completed","failed","cancelled"].includes(data.status)) {
-        clearInterval(_pollingTimers[jobId]);
-        delete _pollingTimers[jobId];
-        loadJobs();
-      }
-      render();
-    } catch {
-      clearInterval(_pollingTimers[jobId]);
-      delete _pollingTimers[jobId];
-    }
-  }, 2500);
-}
-
-async function cancelJob(jobId) {
-  try {
-    await fetch(`/api/jobs/${jobId}`,{method:"DELETE"});
-    if (_pollingTimers[jobId]) { clearInterval(_pollingTimers[jobId]); delete _pollingTimers[jobId]; }
-    if (state._sseConnections[jobId]) { state._sseConnections[jobId].close(); delete state._sseConnections[jobId]; }
-    await loadJobs(); render();
-  } catch {}
 }
 
 function setTab(t, opts = {}) {
@@ -600,16 +357,16 @@ function renderSampleShowcase() {
   return `
     <div class="hero-showcase">
       ${SAMPLE_IMAGES.map((sample, i)=>`
-        <button type="button" class="sample-tile sample-${i+1}" data-sample-prompt="${escapeHtml(sample.prompt)}" title="${escapeHtml(sample.title)}">
-          <img src="${sample.src}" alt="${escapeHtml(sample.title)}" loading="lazy" />
-          <span>${escapeHtml(sample.title)}</span>
-        </button>`).join("")}
+         <button type="button" class="sample-tile sample-${i+1}" data-sample-prompt="${escapeHtml(sample.prompt)}" title="${escapeHtml(sample.title)}">
+           <img src="${sample.src}" alt="${escapeHtml(sample.title)}" loading="lazy" />
+           <span>${escapeHtml(sample.title)}</span>
+         </button>`).join("")}
     </div>`;
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ══════════════════════════════════════════════════════════════════════════
    RENDER
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ══════════════════════════════════════════════════════════════════════════ */
 
 function render() {
   const cur = activeModel();
@@ -636,30 +393,29 @@ function render() {
               <span class="brand-mark">H</span>
               <div><div class="eyebrow">Hyperforge AI</div><strong>Creative Studio</strong></div>
             </div>
-            <h1>Forge luminous images and motion.</h1>
-            <p class="subtitle">A brighter workspace for image generation, LoRA experiments, motion tests, and polished creative previews.</p>
+            <h1>Forge luminous images.</h1>
+            <p class="subtitle">A brighter workspace for image generation, LoRA experiments, and polished creative previews.</p>
             <div class="hero-actions">
               <button type="button" class="hero-action primary" data-sample-prompt="${escapeHtml(SAMPLE_IMAGES[0].prompt)}">Try a Sample</button>
-              <a class="hero-action" href="/queue" data-tab="queue">View Queue</a>
+              <a class="hero-action" href="/library" data-tab="library">View Library</a>
             </div>
           </div>
           <div class="hero-aside">
             ${renderSampleShowcase()}
             <div class="hero-status premium-card inner-card">
-            <div class="status-top">
-              <span class="dot ${state.health?.status==="healthy"?"ok":""}"></span>
-              <span>${escapeHtml(state.health?.status==="healthy"?"System Ready":(state.health?.status||"Starting..."))}</span>
-            </div>
-            <div class="status-grid">
-              <div><label>Studio</label><strong>${state.health?.status==="healthy"?"Ready":"Warming up"}</strong></div>
-              <div><label>Queue</label><strong>${state.queueStats.queued + state.queueStats.processing} active</strong></div>
-              <div><label>Styles</label><strong>${IMAGE_STYLES.length + VIDEO_STYLES.length} presets</strong></div>
-            </div>
-            ${state.auth.required ? `
-              <div class="auth-field">
-                <label for="api-key">API Key</label>
-                <input id="api-key" type="password" autocomplete="off" placeholder="Required for image generation" value="${escapeHtml(state.auth.apiKey)}" />
-              </div>` : ""}
+              <div class="status-top">
+                <span class="dot ${state.health?.status==="healthy"?"ok":""}"></span>
+                <span>${escapeHtml(state.health?.status==="healthy"?"System Ready":(state.health?.status||"Starting..."))}</span>
+              </div>
+              <div class="status-grid">
+                <div><label>Studio</label><strong>${state.health?.status==="healthy"?"Ready":"Warming up"}</strong></div>
+                <div><label>Styles</label><strong>${IMAGE_STYLES.length} presets</strong></div>
+              </div>
+              ${state.auth.required ? `
+                <div class="auth-field">
+                  <label for="api-key">API Key</label>
+                  <input id="api-key" type="password" autocomplete="off" placeholder="Required for image generation" value="${escapeHtml(state.auth.apiKey)}" />
+                </div>` : ""}
             </div>
           </div>
         </section>
@@ -667,10 +423,6 @@ function render() {
         <!-- TAB NAV -->
         <nav class="tab-nav">
           <a class="tab-btn ${tab==="image"?"active":""}" href="/image" data-tab="image">Image</a>
-          <a class="tab-btn ${tab==="video"?"active":""}" href="/video" data-tab="video">Video</a>
-          <a class="tab-btn ${tab==="queue"?"active":""}" href="/queue" data-tab="queue">Jobs
-            <span class="job-count">${state.jobs.filter(j=>j.status==="queued"||j.status==="processing").length||""}</span>
-          </a>
           <a class="tab-btn ${tab==="library"?"active":""}" href="/library" data-tab="library">Library
             <span class="job-count">${state.libraryTotal||""}</span>
           </a>
@@ -678,15 +430,13 @@ function render() {
 
         <main class="page-content" data-page="${escapeHtml(tab)}">
           ${tab==="image"     ? renderImageTab(cur,curImg) : ""}
-          ${tab==="video"     ? renderVideoTab()           : ""}
-          ${tab==="queue"     ? renderQueueTab()           : ""}
           ${tab==="library"   ? renderLibraryTab()         : ""}
         </main>
 
         ${state.error ? `<div class="global-error">${escapeHtml(state.error)}</div>` : ""}
       </div>
       ${state.lightbox ? `<div class="lightbox" id="lightbox"><img src="${state.lightbox}" alt="Preview" /></div>` : ""}
-      ${state.libraryLightbox ? `<div class="lib-lightbox" id="lib-lightbox"><button class="lib-lb-close">&#10005;</button>${state.libraryLightbox.type==='video'? `<video src="${state.libraryLightbox.url}" controls autoplay loop playsinline></video>`: `<img src="${state.libraryLightbox.url}" alt="Preview" />`}</div>` : ""}
+      ${state.libraryLightbox ? `<div class="lib-lightbox" id="lib-lightbox"><button class="lib-lb-close">&#10005;</button><img src="${state.libraryLightbox.url}" alt="Preview" /></div>` : ""}
     </div>`;
 
   bindEvents();
@@ -705,7 +455,7 @@ function restoreFocus(snapshot) {
   }
 }
 
-/* â”€â”€â”€ IMAGE TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── IMAGE TAB ─────────────────────────────────────────────────────────── */
 
 function renderImageTab(currentModel, currentImage) {
   return `
@@ -822,199 +572,25 @@ function renderImageTab(currentModel, currentImage) {
     </div>`;
 }
 
-/* â”€â”€â”€ VIDEO TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-function renderVideoTab() {
-  const f = state.videoForm;
-  const videoModel = activeVideoModel();
-  const latestVideoJob = state.jobs.find(j=>j.job_type==="video"&&
-    (j.status==="completed"||j.status==="processing"||j.status==="queued"));
-
-  return `
-    <div class="layout">
-      <form class="premium-card control-panel" id="video-form">
-        <div class="section-heading"><div><div class="eyebrow">Video Generation</div><h2>Text to Video</h2></div></div>
-
-        <div class="field"><label>Prompt</label>
-          <textarea id="v-prompt" placeholder="A camera slowly pans across a futuristic city at golden hour..." required>${escapeHtml(f.prompt)}</textarea></div>
-
-        <div class="field"><label>Motion Style</label>
-          <div class="style-grid video-style-grid">${VIDEO_STYLES.map(style=>`
-            <button type="button" class="style-card ${f.style_id===style.id?"active":""}" data-video-style="${escapeHtml(style.id)}">
-              <strong>${escapeHtml(style.label)}</strong><span>${escapeHtml(style.suffix)}</span>
-            </button>`).join("")}</div>
-        </div>
-
-        <div class="field"><label>Negative Prompt</label>
-          <textarea id="v-neg" class="compact" placeholder="blurry, static, low motion, worst quality">${escapeHtml(f.negative_prompt||"")}</textarea></div>
-
-        <div class="field"><label>Model</label>
-          <select id="v-model">${state.videoModels.map(m=>`
-            <option value="${escapeHtml(m.name)}" ${f.model_name===m.name?"selected":""}>${escapeHtml(m.name)} - ${escapeHtml(m.description||"")}</option>`).join("")}
-          </select></div>
-
-        <div class="field-group two-col">
-          <div class="field"><label>Resolution</label>
-            <select id="v-resolution">
-              <option value="480p" ${f.resolution==="480p"?"selected":""}>480p (848x480)</option>
-              <option value="540p" ${f.resolution==="540p"?"selected":""}>540p (960x544)</option>
-              <option value="720p" ${f.resolution==="720p"?"selected":""}>720p (1280x720)</option>
-            </select></div>
-          <div class="field"><label>FPS</label>
-            <select id="v-fps">
-              <option value="16" ${f.fps==16?"selected":""}>16 fps</option>
-              <option value="24" ${f.fps==24?"selected":""}>24 fps</option>
-            </select></div>
-        </div>
-
-        <div class="field"><label>Duration</label>
-          <div class="preset-row">${VIDEO_FRAME_PRESETS.map(p=>`
-            <button type="button" class="preset-chip ${Number(f.num_frames)===p.frames?"active":""}" data-vframes="${p.frames}">
-              ${p.label}<small>${p.frames} frames</small></button>`).join("")}</div></div>
-
-        <div class="field-group two-col">
-          <div class="field"><label>Steps</label><input id="v-steps" type="number" min="${videoModel?.min_steps||10}" max="${videoModel?.max_steps||60}" value="${f.num_inference_steps}" /></div>
-          <div class="field"><label>Guidance</label><input id="v-guidance" type="number" min="0" max="20" step="0.5" value="${f.guidance_scale}" /></div>
-        </div>
-
-        <div class="field"><label>Seed</label>
-          <input id="v-seed" value="${escapeHtml(f.seed)}" placeholder="blank = random" /></div>
-
-        <!-- Video LoRA section -->
-        <div class="field"><label>Video LoRA</label>
-          <div class="lora-row">
-            <select id="v-lora">${state.videoLoras.map(l=>`<option value="${escapeHtml(l)}" ${f.lora_name===l?"selected":""}>${escapeHtml(l)}</option>`).join("")}</select>
-            <label class="upload-lora-btn ${state.videoLoraUploadStatus==="uploading"?"uploading":""}" title="Upload video LoRA (.safetensors)">
-              <input type="file" id="v-lora-file-input" accept=".safetensors" style="display:none" />
-              ${state.videoLoraUploadStatus==="uploading"?"...":"Upload"}
-            </label>
-          </div>
-          ${state.videoLoraUploadStatus&&state.videoLoraUploadStatus!=="uploading"?`<div class="lora-upload-msg ${state.videoLoraUploadStatus.startsWith("ok")?"ok":"err"}">${escapeHtml(state.videoLoraUploadStatus.startsWith("ok:")?"Uploaded: "+state.videoLoraUploadStatus.slice(3):state.videoLoraUploadStatus.slice(4))}</div>`:""}
-        </div>
-        <div class="field"><label>LoRA Scale</label>
-          <input id="v-lora-scale" type="number" min="0" max="2" step="0.05" value="${f.lora_scale}" /></div>
-
-        <div class="field"><label>Image-to-Video source (optional)</label>
-          <div class="dropzone" id="v-dropzone">
-            <input type="file" id="v-source-img" accept="image/*" style="display:none" />
-            ${f.source_image_b64
-              ?`<div class="dropzone-preview"><img src="data:image/png;base64,${f.source_image_b64}" alt="Source" /><button type="button" class="dropzone-clear" id="v-clear-img">x</button></div>`
-              :`<div class="dropzone-label" id="v-dropzone-label"><span>Drop or click to upload source image</span></div>`}
-          </div></div>
-
-        <button class="primary-button" type="submit">Generate Video</button>
-      </form>
-
-      <section class="output-column">
-        <div class="premium-card output-panel">
-          <div class="section-heading compact-heading">
-            <div><div class="eyebrow">Output</div><h2>Video Preview</h2></div>
-            ${latestVideoJob?.result?.video_url?`<a class="download-btn" href="${latestVideoJob.result.video_url}" download>Download</a>`:""}
-          </div>
-          ${renderVideoResult(latestVideoJob)}
-        </div>
-        ${renderRecentJobs("video")}
-      </section>
-    </div>`;
-}
-
-function renderVideoResult(job) {
-  if (!job) return `<div class="canvas"><span class="empty-state">Submit a prompt to generate a video.</span></div>`;
-  if (job.status==="completed"&&job.result?.video_url) {
-    return `
-      <div class="video-container">
-        <video controls autoplay loop playsinline src="${job.result.video_url}"></video>
-      </div>
-      <div class="result-grid">
-        <div class="result-card"><label>Duration</label><strong>${formatDur(job.result.duration_seconds)}</strong></div>
-        <div class="result-card"><label>Frames</label><strong>${job.result.num_frames||"-"}</strong></div>
-        <div class="result-card"><label>Time</label><strong>${formatMs(job.result.inference_time_ms)}</strong></div>
-      </div>`;
-  }
-  if (job.status==="processing"||job.status==="queued") {
-    const pct = job.progress||0;
-    const label = job.status==="queued"?"Waiting in queue...":`Generating video... ${pct.toFixed(0)}%`;
-    return `
-      <div class="canvas">
-        <div class="loading-spinner">
-          <div class="spinner"></div>
-          <span>${label}</span>
-          <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-        </div>
-      </div>`;
-  }
-  if (job.status==="failed") {
-    return `<div class="canvas"><span class="empty-state error-state">Generation failed: ${escapeHtml(job.error_message||"Unknown error")}</span></div>`;
-  }
-  return `<div class="canvas"><span class="empty-state">Submit a prompt to generate a video.</span></div>`;
-}
-
-/* â”€â”€â”€ QUEUE TAB â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-
-function renderQueueTab() {
-  const s = state.queueStats;
-  return `
-    <div class="queue-layout">
-      <div class="premium-card queue-stats-card">
-        <div class="section-heading"><div><div class="eyebrow">Studio Queue</div><h2>Creation Activity</h2></div></div>
-        <div class="queue-stats-grid">
-          <div class="queue-stat"><div class="queue-stat-value">${s.queued}</div><div class="queue-stat-label">Queued</div></div>
-          <div class="queue-stat processing"><div class="queue-stat-value">${s.processing}</div><div class="queue-stat-label">Processing</div></div>
-          <div class="queue-stat completed"><div class="queue-stat-value">${s.completed}</div><div class="queue-stat-label">Completed</div></div>
-          <div class="queue-stat failed"><div class="queue-stat-value">${s.failed}</div><div class="queue-stat-label">Failed</div></div>
-        </div>
-      </div>
-
-      <div class="premium-card queue-list-card">
-        <div class="section-heading compact-heading"><div><div class="eyebrow">Recent Jobs</div><h2>All Activity</h2></div></div>
-        ${state.jobs.length===0?`<div class="empty-state" style="padding:24px">No jobs yet. Generate something to see activity here.</div>`:`
-          <div class="job-list">
-            ${state.jobs.map(job=>`
-              <div class="job-item ${job.status}">
-                <div class="job-item-header">
-                  <span class="job-type-badge">${escapeHtml(job.job_type)}</span>
-                  ${statusBadge(job.status)}
-                  <span class="job-model">${escapeHtml(job.model_name||"")}</span>
-                  <span class="job-time">${escapeHtml(job.processing_time_ms?formatMs(job.processing_time_ms):"")}</span>
-                  ${job.status==="queued"?`<button class="job-cancel-btn" data-cancel="${escapeHtml(job.job_id)}">Cancel</button>`:""}
-                </div>
-                ${job.status==="processing"?progressBar(job.progress,"processing"):""}
-                ${job.status==="completed"&&job.result?.video_url?`<a class="job-result-link" href="${job.result.video_url}" target="_blank">View Video</a>`:""}
-                ${job.status==="completed"&&job.result?.audio_url?`<a class="job-result-link" href="${job.result.audio_url}" target="_blank">Play Audio</a>`:""}
-                ${job.status==="failed"&&job.error_message?`<div class="job-error">${escapeHtml(job.error_message)}</div>`:""}
-              </div>`).join("")}
-          </div>`}
-      </div>
-    </div>`;
-}
-
-/* â”€â”€â”€ Shared: recent jobs panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── LIBRARY TAB ───────────────────────────────────────────────────────── */
 
 function renderLibraryTab() {
   const items = state.library;
-  const filter = state.libraryFilter;
   const view = state.libraryView;
-
-  const filterBtns = ['all','image','video'].map(f =>
-    `<button type="button" class="lib-filter-btn ${filter===f?'active':''}" data-lib-filter="${f}">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`
-  ).join('');
 
   const viewBtns = `
     <button type="button" class="lib-view-btn ${view==='grid'?'active':''}" data-lib-view="grid" title="Grid view">&#9632;&#9632;</button>
     <button type="button" class="lib-view-btn ${view==='list'?'active':''}" data-lib-view="list" title="List view">&#9776;</button>
   `;
 
-  const empty = `<div class="lib-empty"><span>\u2727</span><p>Nothing saved yet.</p><p class="lib-empty-sub">Generate an image or video and it will appear here automatically.</p></div>`;
+  const empty = `<div class="lib-empty"><span>✦</span><p>Nothing saved yet.</p><p class="lib-empty-sub">Generate an image and it will appear here automatically.</p></div>`;
 
   const gridItems = items.map(item => {
-    const thumb = item.type === 'image'
-      ? `<img src="${item.url}" alt="${escapeHtml(item.prompt||'')}" loading="lazy" />`
-      : `<video src="${item.url}" muted preload="metadata" loop playsinline></video>`;
+    const thumb = `<img src="${item.url}" alt="${escapeHtml(item.prompt||'')}" loading="lazy" />`;
     const date = new Date(item.created_at * 1000).toLocaleDateString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
     return `
-      <div class="lib-item" data-lib-lightbox="${escapeHtml(item.url)}" data-lib-type="${item.type}">
+      <div class="lib-item" data-lib-lightbox="${escapeHtml(item.url)}">
         <div class="lib-thumb">${thumb}
-          <span class="lib-type-badge">${item.type}</span>
           <div class="lib-item-overlay">
             <a class="lib-btn" href="${item.url}" download title="Download">&#8681;</a>
             <button type="button" class="lib-btn lib-delete-btn" data-lib-delete="${escapeHtml(item.id)}" title="Delete">&#10005;</button>
@@ -1035,7 +611,6 @@ function renderLibraryTab() {
     const date = new Date(item.created_at * 1000).toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'});
     return `
       <div class="lib-list-item">
-        <span class="lib-type-badge">${item.type}</span>
         <div class="lib-list-prompt">${escapeHtml((item.prompt||'').slice(0,120))}${(item.prompt||'').length>120?'&hellip;':''}</div>
         <span class="lib-list-model">${escapeHtml(item.model_name||'')}</span>
         <span class="lib-list-date">${date}</span>
@@ -1049,7 +624,9 @@ function renderLibraryTab() {
   return `
     <div class="lib-shell">
       <div class="lib-toolbar">
-        <div class="lib-filters">${filterBtns}</div>
+        <div class="lib-toolbar-left">
+          <h2>Library Inventory</h2>
+        </div>
         <div class="lib-toolbar-right">
           <span class="lib-count">${state.libraryTotal} item${state.libraryTotal!==1?'s':''}</span>
           <div class="lib-views">${viewBtns}</div>
@@ -1063,31 +640,7 @@ function renderLibraryTab() {
     </div>`;
 }
 
-function renderRecentJobs(type) {
-  const jobs = state.jobs.filter(j=>j.job_type===type).slice(0,5);
-  if (!jobs.length) return "";
-  return `
-    <div class="premium-card queue-list-card">
-      <div class="section-heading compact-heading"><div><div class="eyebrow">Activity</div><h2>Recent ${type} jobs</h2></div></div>
-      <div class="job-list compact">
-        ${jobs.map(job=>`
-          <div class="job-item ${job.status}">
-            <div class="job-item-header">
-              ${statusBadge(job.status)}
-              <span class="job-model">${escapeHtml(job.model_name||"")}</span>
-              <span class="job-time">${job.processing_time_ms?formatMs(job.processing_time_ms):""}</span>
-              ${job.status==="queued"?`<button class="job-cancel-btn" data-cancel="${escapeHtml(job.job_id)}">Cancel</button>`:""}
-            </div>
-            ${job.status==="processing"?progressBar(job.progress,"processing"):""}
-            ${job.status==="completed"&&job.result?.video_url?`<a class="job-result-link" href="${job.result.video_url}" target="_blank">Play</a>`:""}
-            ${job.status==="completed"&&job.result?.audio_url?`<a class="job-result-link" href="${job.result.audio_url}" target="_blank">Play</a>`:""}
-            ${job.status==="failed"?`<div class="job-error">${escapeHtml(job.error_message||"Failed")}</div>`:""}
-          </div>`).join("")}
-      </div>
-    </div>`;
-}
-
-/* â”€â”€â”€ Event Binding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Event Binding ─────────────────────────────────────────────────────── */
 
 function bindEvents() {
   bindInput("api-key", v=>{
@@ -1116,15 +669,6 @@ function bindEvents() {
     });
   });
 
-  document.querySelectorAll("[data-video-style]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      state.videoForm.style_id = btn.dataset.videoStyle;
-      render();
-      document.getElementById("video-form")?.classList.add("focus-pulse");
-      setTimeout(()=>document.getElementById("video-form")?.classList.remove("focus-pulse"), 700);
-    });
-  });
-
   // Model cards
   document.querySelectorAll("[data-model]").forEach(card=>{
     card.addEventListener("click", ()=>applyModel(card.dataset.model));
@@ -1136,9 +680,6 @@ function bindEvents() {
   });
 
   // Library controls
-  document.querySelectorAll("[data-lib-filter]").forEach(btn=>{
-    btn.addEventListener("click", ()=>loadLibrary(btn.dataset.libFilter));
-  });
   document.querySelectorAll("[data-lib-view]").forEach(btn=>{
     btn.addEventListener("click", ()=>{ state.libraryView=btn.dataset.libView; render(); });
   });
@@ -1149,8 +690,7 @@ function bindEvents() {
     el.addEventListener("click", e=>{
       if(e.target.closest('.lib-btn')) return;
       const url=el.dataset.libLightbox;
-      const type=el.dataset.libType;
-      state.libraryLightbox={url,type}; render();
+      state.libraryLightbox={url}; render();
     });
   });
   const libRefresh = document.getElementById("lib-refresh-btn");
@@ -1164,11 +704,6 @@ function bindEvents() {
   // Resolution presets
   document.querySelectorAll("[data-width]").forEach(btn=>{
     btn.addEventListener("click", ()=>applyResolution(Number(btn.dataset.width),Number(btn.dataset.height)));
-  });
-
-  // Video frame presets
-  document.querySelectorAll("[data-vframes]").forEach(btn=>{
-    btn.addEventListener("click", ()=>{ state.videoForm.num_frames=Number(btn.dataset.vframes); render(); });
   });
 
   // Image form sync
@@ -1211,57 +746,6 @@ function bindEvents() {
       render();
     });
   });
-
-  // Video form sync
-  bindInput("v-prompt",   v=>state.videoForm.prompt=v);
-  bindInput("v-neg",      v=>state.videoForm.negative_prompt=v);
-  bindInput("v-model",    v=>{ applyVideoModelDefaults(v, { force: true }); render(); });
-  bindInput("v-resolution",v=>state.videoForm.resolution=v);
-  bindInput("v-fps",      v=>state.videoForm.fps=Number(v));
-  bindInput("v-steps",    v=>state.videoForm.num_inference_steps=v);
-  bindInput("v-guidance", v=>state.videoForm.guidance_scale=v);
-  bindInput("v-seed",     v=>state.videoForm.seed=v);
-  bindInput("v-lora",     v=>state.videoForm.lora_name=v);
-  bindInput("v-lora-scale",v=>state.videoForm.lora_scale=v);
-
-  // Video LoRA upload
-  const vLoraInput = document.getElementById("v-lora-file-input");
-  if (vLoraInput) vLoraInput.addEventListener("change", e=>{ if(e.target.files[0]) uploadVideoLora(e.target.files[0]); });
-
-  // Video source image
-  const vSrcInput = document.getElementById("v-source-img");
-  const vDrop = document.getElementById("v-dropzone");
-  if (vSrcInput) vSrcInput.addEventListener("change", async e=>{
-    if(e.target.files[0]) {
-      state.videoForm.source_image_b64 = await fileToBase64(e.target.files[0]);
-      state.videoSourceName = e.target.files[0].name;
-      render();
-    }
-  });
-  if (vDrop) {
-    vDrop.addEventListener("click", e=>{ if(!e.target.classList.contains("dropzone-clear")) document.getElementById("v-source-img")?.click(); });
-    vDrop.addEventListener("dragover", e=>e.preventDefault());
-    vDrop.addEventListener("drop", async e=>{
-      e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file?.type.startsWith("image/")) {
-        state.videoForm.source_image_b64 = await fileToBase64(file);
-        state.videoSourceName = file.name;
-        render();
-      }
-    });
-  }
-  const vClearImg = document.getElementById("v-clear-img");
-  if (vClearImg) vClearImg.addEventListener("click", e=>{ e.stopPropagation(); state.videoForm.source_image_b64=null; state.videoSourceName=""; render(); });
-
-  // Video form submit
-  const vf = document.getElementById("video-form");
-  if (vf) vf.addEventListener("submit", onVideoGenerate);
-
-  // Job cancel buttons
-  document.querySelectorAll("[data-cancel]").forEach(btn=>{
-    btn.addEventListener("click", ()=>cancelJob(btn.dataset.cancel));
-  });
 }
 
 function bindInput(id, setter) {
@@ -1271,19 +755,15 @@ function bindInput(id, setter) {
   el.addEventListener("change", ()=>setter(el.value));
 }
 
-/* â”€â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Init ──────────────────────────────────────────────────────────────── */
 
 async function init() {
   state.activeTab = tabFromPath();
   render();
-  await Promise.all([loadAuthStatus(), loadHealth(), loadModels(), loadJobs(), loadLibrary("all")]);
+  await Promise.all([loadAuthStatus(), loadHealth(), loadModels(), loadLibrary()]);
   render();
   // Periodic refresh
   setInterval(loadHealth, 15000);
-  setInterval(async ()=>{ if (await loadJobs()) render(); }, 8000);
-  // Re-connect any active jobs on page reload
-  state.jobs.filter(j=>j.status==="processing"||j.status==="queued")
-    .forEach(j=>startJobSSE(j.job_id));
 }
 
 window.addEventListener("popstate", ()=>{

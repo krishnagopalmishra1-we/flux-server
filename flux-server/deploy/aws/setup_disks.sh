@@ -113,13 +113,11 @@ echo "Creating directories..."
 mkdir -p \
   "$MOUNT_POINT/hf-cache" \
   "$MOUNT_POINT/hf-cache/loras" \
-  "$MOUNT_POINT/hf-cache/video_loras" \
   "$MOUNT_POINT/model-cache-ssd" \
-  "$MOUNT_POINT/outputs/video" \
-  "$MOUNT_POINT/loras" \
-  "$MOUNT_POINT/video_loras"
+  "$MOUNT_POINT/outputs/image" \
+  "$MOUNT_POINT/loras"
 
-chmod 777 "$MOUNT_POINT/outputs" "$MOUNT_POINT/outputs/video"
+chmod 777 "$MOUNT_POINT/outputs" "$MOUNT_POINT/outputs/image"
 
 echo ""
 echo "=== Disk setup complete ==="

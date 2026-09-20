@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# launch.sh — Launch Hyperforge AI on an AWS p4d.24xlarge spot instance.
+# launch.sh - Launch Hyperforge AI on an AWS g5 image-generation instance.
 #
 # Prerequisites:
 #   aws configure   (or set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
@@ -7,7 +7,7 @@
 #
 # Usage:
 #   KEY_NAME=my-keypair ./launch.sh
-#   KEY_NAME=my-keypair REGION=us-west-2 INSTANCE_TYPE=p4d.24xlarge ./launch.sh
+#   KEY_NAME=my-keypair REGION=us-west-2 INSTANCE_TYPE=g5.2xlarge ./launch.sh
 
 set -euo pipefail
 
@@ -16,12 +16,12 @@ set -euo pipefail
 
 # ── Configurable ──────────────────────────────────────────────────────────────
 REGION="${REGION:-us-east-1}"
-INSTANCE_TYPE="${INSTANCE_TYPE:-p4d.24xlarge}"
+# Target g5.2xlarge (1 × A10G 24GB, 8 vCPUs) to fit On-Demand G quota
+INSTANCE_TYPE="${INSTANCE_TYPE:-g5.2xlarge}"
 INSTANCE_NAME="hyperforge-gpu"
 SG_NAME="hyperforge-sg"
 
-# EBS data disk — model cache persists across spot interruptions (DeleteOnTermination=false)
-# 1 TB gp3 with 500 MB/s throughput → WAN 14B (118 GB) loads in ~4 min vs 30 min on GCP HDD
+# EBS data disk - image model cache persists across stop/start cycles.
 DATA_DISK_GB=1000
 DATA_DISK_THROUGHPUT=500
 DATA_DISK_IOPS=6000
@@ -121,13 +121,6 @@ INSTANCE_ID=$(aws ec2 run-instances \
       }
     }
   ]" \
-  --instance-market-options '{
-    "MarketType": "spot",
-    "SpotOptions": {
-      "SpotInstanceType": "persistent",
-      "InstanceInterruptionBehavior": "stop"
-    }
-  }' \
   --user-data "file://$SCRIPT_DIR/bootstrap.sh" \
   --tag-specifications \
     "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{Key=Project,Value=hyperforge}]" \

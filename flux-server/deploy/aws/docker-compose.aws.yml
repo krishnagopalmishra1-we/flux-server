@@ -1,20 +1,9 @@
-# AWS deployment compose file.
+# AWS deployment — g5.2xlarge (1 × A10G 24 GB).
+# Default model: flux-1-dev with FP8 quantization (~18 GB VRAM, fits on 24 GB A10G).
+# Image generation only.
 # bootstrap.sh copies this to flux-server/docker-compose.yml on the EC2 instance.
-# All models live on the persistent EBS data disk mounted at /mnt/model-disk.
 
 services:
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - /mnt/model-disk/redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
   flux-server:
     build: .
     user: "0:0"
@@ -27,14 +16,13 @@ services:
       - /mnt/model-disk/outputs:/mnt/outputs
       # LoRA adapters — bind-mount so uploads survive container rebuilds
       - ./loras:/app/loras
-      - ./video_loras:/app/video_loras
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-      # Single-GPU deployment for g5.2xlarge (1 × A10G)
-      - VIDEO_PARALLEL_BACKEND=auto
-      - GPUS_PER_JOB=1
-      - JOB_BACKEND=redis
-      - REDIS_URL=redis://redis:6379/0
+      # ── Model selection ───────────────────────────────────────────────────────
+      # flux-1-dev with FP8 (torchao): ~18 GB VRAM, 1.8× faster than NF4.
+      # TEXT encoders (T5-XXL) stay in INT8 to keep total footprint <20 GB.
+      - MODEL_ID=black-forest-labs/FLUX.1-dev
+      - FLUX_QUANTIZE=fp8
     env_file:
       - .env
     shm_size: '16g'
@@ -46,6 +34,3 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy

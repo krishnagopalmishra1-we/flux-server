@@ -99,10 +99,6 @@ curl http://<PUBLIC_IP>:8080/health
 # SSH in (IP saved by launch.sh)
 ssh -i ~/.ssh/hyperforge.pem ubuntu@<PUBLIC_IP>
 
-# Check running jobs
-curl -s http://localhost:8080/api/jobs | python3 -c \
-  "import sys,json; [print(j['job_id'][:8], j['status'], j.get('progress')) for j in json.load(sys.stdin)]"
-
 # Tail server logs
 sudo docker compose -C /opt/flux-server/flux-server logs -f
 
@@ -130,24 +126,16 @@ sudo docker compose up --build -d
 
 ---
 
-## Storage layout
-
 | Path (inside container) | Host path | Contents |
 |---|---|---|
-| `/mnt/hf-cache` | `/mnt/model-disk/hf-cache` | All HF model weights (WAN 14B, I2V 14B, etc.) |
-| `/app/model_cache` | `/mnt/model-disk/model-cache-ssd` | Priority model cache (WAN 1.3B, FLUX) |
-| `/mnt/outputs` | `/mnt/model-disk/outputs` | Generated videos and images |
+| `/mnt/hf-cache` | `/mnt/model-disk/hf-cache` | All HF model weights (SDXL, SD3.5, etc.) |
+| `/app/model_cache` | `/mnt/model-disk/model-cache-ssd` | Priority model cache (FLUX.1-dev) |
+| `/mnt/outputs` | `/mnt/model-disk/outputs` | Generated images |
 | `/app/loras` | `flux-server/loras/` | Uploaded image LoRAs |
-| `/app/video_loras` | `flux-server/video_loras/` | Uploaded video LoRAs |
 
 All model data survives instance stop/start. Data is lost only if the EBS volume
 is explicitly deleted (it has `DeleteOnTermination=false`).
 
-**Model load times from EBS gp3 (500 MB/s vs GCP HDD 65 MB/s):**
-| Model | AWS EBS | GCP HDD |
-|---|---|---|
-| WAN 14B (118 GB) | ~4 min | ~30 min |
-| WAN 1.3B (27 GB) | ~1 min | ~7 min |
 
 ---
 
@@ -166,9 +154,9 @@ but they are negligible (~$4/day for 1 TB) vs. the GPU cost (~$1.21/hr).
 
 | Instance | GPU | VRAM | Notes |
 |---|---|---|---|
-| `g5.xlarge` | A10G | 24 GB | Can run WAN 1.3B and FLUX. 14B NF4 needs 25.5 GB — tight. |
-| `g5.2xlarge` | A10G | 24 GB | Same GPU, more CPU/RAM — better for long video. |
-| `p3.2xlarge` | V100 | 16 GB | Only image models. No 14B video. |
+| `g5.xlarge` | A10G | 24 GB | Can run FLUX.1-dev. |
+| `g5.2xlarge` | A10G | 24 GB | Same GPU, more CPU/RAM — better for parallel tasks. |
+| `p3.2xlarge` | V100 | 16 GB | Only image models. No FLUX.1-dev. |
 
 ---
 
@@ -197,7 +185,7 @@ sudo mount -a   # fstab entry was added by setup_disks.sh
 ```bash
 df -h /mnt/model-disk
 # Clean old outputs (container auto-TTL is OUTPUT_TTL_HOURS in .env)
-sudo find /mnt/model-disk/outputs -name '*.mp4' -mtime +1 -delete
+sudo find /mnt/model-disk/outputs -name '*.png' -mtime +1 -delete
 ```
 
 **Instance capacity not available:**
