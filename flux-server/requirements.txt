@@ -10,7 +10,7 @@ diffusers==0.35.1
 transformers==4.44.2
 accelerate==0.33.0
 bitsandbytes==0.43.3        # INT8 for T5-XXL text encoder
-torchao==0.8.0              # FP8 weight-only quantization for FLUX transformer (faster than NF4)
+# torchao==0.8.0              # Disabled: Fails to compile on Colab Python 3.13. Falling back to NF4.
 peft==0.17.0                # LoRA adapter loading via PEFT
 safetensors==0.4.4
 sentencepiece==0.2.0

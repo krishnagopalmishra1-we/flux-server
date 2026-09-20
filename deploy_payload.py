@@ -26,7 +26,8 @@ print("[4/4] Starting FastAPI Server & Uncensored FLUX...")
 if 'HF_TOKEN' not in os.environ:
     print("WARNING: HF_TOKEN not injected! Model downloads may fail.")
 
-# Start server in background
+# Start the server (uvicorn handles FastAPI)
+os.environ['FLUX_QUANTIZE'] = 'nf4'
 subprocess.Popen(
     ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"], 
     stdout=open('/content/server.log', 'w'), 
