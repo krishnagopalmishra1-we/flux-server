@@ -33,7 +33,7 @@ Write-Host ""
 Write-Host "Step 1: Checking Authentication..." -ForegroundColor Yellow
 Write-Host "If a browser window opens, please log into the Google Account associated with your Colab Pro."
 try {
-    & $colab_cmd auth login
+    & $colab_cmd auth
 } catch {
     Write-Host "Authentication failed or was cancelled." -ForegroundColor Red
     exit 1
@@ -42,6 +42,16 @@ try {
 # 3. Provision GPU
 Write-Host ""
 Write-Host "Step 2: Provisioning Colab Pro GPU (A100)..." -ForegroundColor Yellow
+Write-Host "Cleaning up old sessions to prevent multiple active instances..."
+$sessions = & $colab_cmd sessions
+foreach ($line in $sessions) {
+    if ($line -match "^\[([a-zA-Z0-9]+)\]") {
+        $sessionId = $matches[1]
+        Write-Host "Stopping existing session $sessionId..."
+        & $colab_cmd stop -s $sessionId
+    }
+}
+
 Write-Host "This will consume Colab Compute Units."
 try {
     & $colab_cmd new --gpu A100
@@ -54,8 +64,22 @@ try {
 Write-Host ""
 Write-Host "Step 3: Preparing deployment payload..." -ForegroundColor Yellow
 
-# Prompt the user for their HuggingFace token securely
-$HF_TOKEN = Read-Host -Prompt "Please paste your HuggingFace Token (HF_TOKEN) to download FLUX"
+$HF_TOKEN = ""
+if (Test-Path "flux-server\.env") {
+    $envLines = Get-Content "flux-server\.env"
+    foreach ($line in $envLines) {
+        if ($line -match "^HF_TOKEN=(.*)") {
+            $HF_TOKEN = $matches[1].Trim()
+            Write-Host "Successfully loaded HF_TOKEN from flux-server\.env" -ForegroundColor Green
+            break
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($HF_TOKEN)) {
+    # Prompt the user for their HuggingFace token securely
+    $HF_TOKEN = Read-Host -Prompt "Please paste your HuggingFace Token (HF_TOKEN) to download FLUX"
+}
 if ([string]::IsNullOrWhiteSpace($HF_TOKEN)) {
     Write-Host "HF_TOKEN is required to download the gated model. Exiting." -ForegroundColor Red
     exit 1
