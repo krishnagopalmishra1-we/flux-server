@@ -13,9 +13,23 @@ subprocess.run("rm -rf /content/hyperforge", shell=True)
 subprocess.run("git clone https://github.com/krishnagopalmishra1-we/flux-server.git /content/hyperforge", shell=True)
 os.chdir("/content/hyperforge/flux-server")
 
+import threading
+import time
+
+def keep_alive():
+    while getattr(threading.current_thread(), "do_run", True):
+        print("... [compiling C++ extensions, please wait] ...")
+        time.sleep(30)
+
 print("[2/4] Installing dependencies (this takes a minute)...")
-subprocess.run("pip install -r requirements.txt", shell=True, check=True)
-subprocess.run("pip install fastapi uvicorn pydantic-settings python-multipart", shell=True, check=True)
+t = threading.Thread(target=keep_alive)
+t.start()
+try:
+    subprocess.run("pip install -r requirements.txt", shell=True, check=True)
+    subprocess.run("pip install fastapi uvicorn pydantic-settings python-multipart", shell=True, check=True)
+finally:
+    t.do_run = False
+    t.join()
 
 print("[3/4] Establishing secure tunnel...")
 subprocess.run("wget -q -c -nc https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", shell=True)
