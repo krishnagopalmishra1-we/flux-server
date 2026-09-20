@@ -6,13 +6,22 @@ Write-Host "🚀 Hyperforge AI - Headless Colab CLI Automator" -ForegroundColor 
 Write-Host "=================================================" -ForegroundColor Cyan
 Write-Host ""
 
+$colab_cmd = "$env:USERPROFILE\.local\bin\colab.exe"
+$uv_cmd = "$env:USERPROFILE\.local\bin\uv.exe"
+
 # 1. Install Google Colab CLI if missing
-if (-not (Get-Command "colab" -ErrorAction SilentlyContinue)) {
-    Write-Host "Google Colab CLI not found. Installing via pip..." -ForegroundColor Yellow
-    pip install git+https://github.com/googlecolab/google-colab-cli
+if (-not (Test-Path $colab_cmd)) {
+    Write-Host "Google Colab CLI not found. Installing Python 3.12 and CLI via uv..." -ForegroundColor Yellow
     
-    if (-not (Get-Command "colab" -ErrorAction SilentlyContinue)) {
-        Write-Host "Failed to install Colab CLI. Ensure Python/pip is in your PATH." -ForegroundColor Red
+    if (-not (Test-Path $uv_cmd)) {
+        Write-Host "Installing uv package manager..."
+        irm https://astral.sh/uv/install.ps1 | iex
+    }
+    
+    & $uv_cmd tool install --python 3.12 git+https://github.com/googlecolab/google-colab-cli
+    
+    if (-not (Test-Path $colab_cmd)) {
+        Write-Host "Failed to install Colab CLI." -ForegroundColor Red
         exit 1
     }
 }
@@ -24,7 +33,7 @@ Write-Host ""
 Write-Host "Step 1: Checking Authentication..." -ForegroundColor Yellow
 Write-Host "If a browser window opens, please log into the Google Account associated with your Colab Pro."
 try {
-    colab auth login
+    & $colab_cmd auth login
 } catch {
     Write-Host "Authentication failed or was cancelled." -ForegroundColor Red
     exit 1
@@ -34,9 +43,8 @@ try {
 Write-Host ""
 Write-Host "Step 2: Provisioning Colab Pro GPU (A100)..." -ForegroundColor Yellow
 Write-Host "This will consume Colab Compute Units."
-# We use --gpu A100 (or L4). If A100 is unavailable, Colab will automatically attempt fallback if configured.
 try {
-    colab new --gpu A100
+    & $colab_cmd new --gpu A100
 } catch {
     Write-Host "Failed to provision GPU. Ensure you have Colab Compute Units available." -ForegroundColor Red
     exit 1
@@ -44,6 +52,23 @@ try {
 
 # 4. Execute Payload
 Write-Host ""
-Write-Host "Step 3: Uploading and executing deployment payload..." -ForegroundColor Yellow
-# Send the local deploy_payload.sh to the Colab environment and run it
-colab exec -f deploy_payload.sh
+Write-Host "Step 3: Preparing deployment payload..." -ForegroundColor Yellow
+
+# Prompt the user for their HuggingFace token securely
+$HF_TOKEN = Read-Host -Prompt "Please paste your HuggingFace Token (HF_TOKEN) to download FLUX"
+if ([string]::IsNullOrWhiteSpace($HF_TOKEN)) {
+    Write-Host "HF_TOKEN is required to download the gated model. Exiting." -ForegroundColor Red
+    exit 1
+}
+
+$tempPayload = "deploy_payload_temp.py"
+$payloadContent = Get-Content "deploy_payload.py" -Raw
+# Prepend the token injection to the script
+$injectedContent = "import os`nos.environ['HF_TOKEN'] = '$HF_TOKEN'`n" + $payloadContent
+Set-Content -Path $tempPayload -Value $injectedContent
+
+Write-Host "Uploading and executing payload on Colab A100..." -ForegroundColor Yellow
+& $colab_cmd exec -f $tempPayload
+
+# Cleanup
+Remove-Item -Path $tempPayload -ErrorAction SilentlyContinue
