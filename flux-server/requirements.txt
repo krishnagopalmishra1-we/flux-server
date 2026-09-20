@@ -1,7 +1,8 @@
 setuptools>=70.0
 
 # ── Core inference stack ─────────────────────────────
-# Using Colab's default pre-installed PyTorch 2.4.x since torchao is disabled.
+--extra-index-url https://download.pytorch.org/whl/nightly/cu124
+torch>=2.4.0
 # FlashAttention-2 ships inside PyTorch 2.x via scaled_dot_product_attention.
 # Install flash-attn separately only if you want the standalone C++ kernel:
 #   pip install flash-attn --no-build-isolation
