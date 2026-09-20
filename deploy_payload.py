@@ -11,7 +11,7 @@ print("=" * 60)
 # -- Step 1: Clone the codebase --
 print("\n[1/5] Downloading latest codebase...")
 subprocess.run("rm -rf /content/hyperforge", shell=True)
-subprocess.run("git clone https://github.com/krishnagopalmishra1-we/flux-server.git /content/hyperforge", shell=True, check=True)
+subprocess.run("git clone -b codex/hyperforge-runtime-hardening-impl https://github.com/krishnagopalmishra1-we/flux-server.git /content/hyperforge", shell=True, check=True)
 os.chdir("/content/hyperforge/flux-server")
 
 # -- Step 2: Install ONLY the missing packages --
